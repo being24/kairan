@@ -864,7 +864,7 @@ export function createApp(deps: AppDeps): Hono {
     }
     const answered = store.answerAsk(ask.id, answers);
     hub.broadcast({ type: "ask:changed", sessionId: ask.sessionId });
-    // ask_user が待っていない場合でも request_review / list_feedback 側で回収できるよう起こす
+    // 回答を待っているのは Stop hook（claim）か list_feedback 側。どちらでも拾えるよう起こす
     signals.notify(feedbackKey(ask.sessionId));
     return c.json(answered);
   });

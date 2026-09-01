@@ -360,8 +360,10 @@ export async function runMcpServer(): Promise<void> {
     async (input, ctx) => {
       try {
         const sessionId = await resolveSessionId(input.session);
+        // wait_seconds を渡すエージェントは Stop hook を持たない想定なので、通知・
+        // reviewWaiting バッジは request_review 自身が立てないと誰にも届かない
+        const requested = await client.requestReview(sessionId);
         if (input.wait_seconds == null) {
-          const requested = await client.requestReview(sessionId);
           if (requested.status === "feedback-pending") {
             return textResult(
               "The human has already submitted feedback you have not read yet. " +

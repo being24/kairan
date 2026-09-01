@@ -21,7 +21,9 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 - **タブの favicon がステータスを示す**。あなたの対応待ち（未回答の質問・agent がレビュー送信を待っている）があれば赤バッジ、タブを開いている間に届いた未読の publish があれば青バッジ。タブタイトルにも対応待ちの件数が出る
 - **表示中のファイルを「Finder で表示」「エディタで開く」「ダウンロード」できる**。Finder / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
 - publish 時に macOS 通知センターへ通知（設定で off 可）。[terminal-notifier](https://github.com/julienXX/terminal-notifier) が入っていれば**通知クリックでそのファイルをブラウザで開ける**（`brew install terminal-notifier`。無ければ osascript 通知にフォールバック、クリック遷移なし）
-- **人間 → agent のフィードバック**にも対応。文書にインラインコメントを付けて GitHub PR レビューのように一括送信でき（`request_review` で agent が受け取る）、agent からの選択肢つき質問（`ask_user`）にブラウザ上で回答できる
+- **人間 → agent のフィードバック**にも対応。文書にインラインコメントを付けて GitHub PR レビューのように一括送信でき、agent からの選択肢つき質問は**その文書の末尾に埋め込まれたフォーム**として出る
+  - **agent は待たない**。回答・レビューは Stop hook（`kairan hook stop`）がセッションへ注入する。hook を入れていない agent は次の kairan tool call か `list_feedback` で回収する
+  - 質問は 1 文書に 1 セットだけ。同じ文書に publish し直すと前の未回答の質問は置き換わるので、**答えないまま溜まらない**
   - 選択範囲へのインラインコメントは markdown・HTML の**どちらの表示でも**使える（HTML は実行したまま。ソース表示ではファイル全体へのコメントのみ）
   - 本文の横に常時並ぶコメントカードは markdown 表示だけ。HTML では iframe が内側でスクロールして位置を追えないため、ハイライトの hover / クリックでカードを出す
 
@@ -46,6 +48,37 @@ claude mcp add --scope user kairan -- kairan mcp
 command = "kairan"
 args = ["mcp"]
 ```
+
+### Stop hook（回答をセッションへ届ける・Claude Code）
+
+質問への回答とレビューは、**agent が待つのではなく Stop hook が注入する**。`~/.claude/settings.json` の `Stop` に足す:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v kairan >/dev/null 2>&1; then kairan hook stop; else exit 0; fi",
+            "asyncRewake": true,
+            "timeout": 3900,
+            "statusMessage": "kairan: 回答を待っています"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- `asyncRewake: true` が要る。hook はバックグラウンドで走り、回答が届いた時点でセッションを起こす（`timeout` は秒。`hookWaitMs` より長くしておく）
+- **止まっているデーモンを hook が起こすことはない**。質問もレビューも無い普通のターンでは即座に終わる
+- **ターン終了時に `Stop hook error occurred · ctrl+o to see` と出るのは正常**。Claude Code は「モデルを起こす」合図に exit code 2 を使うため、成功時もエラー表示になる
+- hook を入れない場合も動く（回答は次の kairan tool call か `list_feedback` で回収される）。ただし人が答えたことに気付くのは agent が次に kairan を触ったときになる
+
+**なぜ hook 経由なのか**: MCP の tool call は Claude Code のハーネス側で壁時計 270 秒で打ち切られる（progress 通知では延びない）。人間の応答を tool call の中で待つ設計は、答えるのに数分かかる質問では成立しない。
 
 ## tool
 
@@ -72,9 +105,12 @@ markdown / HTML をブラウザに表示する。`path`（ファイルパス）�
 | `format` | `markdown` / `html`。省略時は拡張子から推定 |
 | `session` | publish 先のセッション ID（別プロセスから同じセッションを継続するときに使う）。省略時はこのプロセスのセッション |
 | `title` | ファイルリストに表示するタイトル |
+| `questions` | この文書について聞きたいこと（最大 8 問）。文書の末尾にフォームとして出る。各問は選択肢 + 自由記述を持つ。**渡さなければ今ある質問に触らない / `[]` を渡すと取り下げ** |
 | `open` | `true` で強制オープン / `false` でオープン抑制 |
 
-戻り値: `{ url, sessionId, fileId, revision, pendingFeedback }`（`pendingFeedback` は未受領フィードバック件数）
+戻り値: `{ url, sessionId, fileId, revision, pendingFeedback, askId }`（`pendingFeedback` は未受領フィードバック件数、`askId` は文書に出ている質問セットの ID）
+
+`questions` は**ブロックしない**。同じ内容で publish し直しても同じフォームが残り（回答途中の入力も消えない）、内容を変えると前の未回答の質問は取り下げられて新しいものに置き換わる。答えないまま何個も並ぶことはない。
 
 `path` で publish したファイルは元の絶対パスが記録され、ブラウザの「Finder で表示」「エディタで開く」から開ける（`content` で publish し直すと記録は消える）。パス自体は API の応答にも `list_files` にも出ない。
 
@@ -84,13 +120,11 @@ markdown / HTML をブラウザに表示する。`path`（ファイルパス）�
 
 ### `request_review`
 
-人間にブラウザでのレビューを依頼し、**送信されるまでブロックする**。人間側はコメントを下書きとして溜め、総評とともに「送信」した時点でまとめて返る（GitHub PR レビューと同じモデル。コメント 0 件 + 総評空の「コメントなしで返す」も可）。timeout（デフォルト 20 分、`timeout_seconds` で変更可）で「まだフィードバックなし」が返るので、続けて待つ場合は再度呼ぶ（再呼び出しループで何時間でも待てる）。
+人間にブラウザでのレビューを依頼する。**ブロックしない**。人間側はコメントを下書きとして溜め、総評とともに「送信」した時点でまとめて返る（GitHub PR レビューと同じモデル。コメント 0 件 + 総評空の「コメントなしで返す」も可）。送信されたレビューは Stop hook がセッションへ注入する。
 
-戻り値には各コメントの `commentId`・対象ファイル・引用文（選択範囲）・本文と、総評・スレッド返信・未回収の質問回答が含まれる。
+各コメントの `commentId`・対象ファイル・引用文（選択範囲）・本文と、総評・スレッド返信・未回収の質問回答が届く。
 
-### `ask_user`
-
-選択肢つきの質問カードをブラウザに表示し、**回答されるまでブロックする**。複数 question を 1 カードに積め、各 question は選択肢 + 自由記述（常設）を持つ。人間は全問に答えてから送信する。`file` を渡すとその質問がどのファイルの話かサイドバーにバッジ表示される。timeout 後に同じ質問で再度呼ぶと**既存カードを再利用して待ち直す**（カードは増えない）。
+`wait_seconds` を明示的に渡したときだけ、その秒数だけブロックして待つ（Stop hook を持たない agent 向け）。
 
 ### `reply_comment`
 
@@ -108,6 +142,7 @@ kairan restart   # デーモンの再起動（コード・設定変更の反映�
 kairan stop      # デーモンの停止（通常は不要: 全接続が消えると自動停止する）
 kairan daemon    # デーモンをフォアグラウンド起動（通常は自動起動されるため不要）
 kairan relink    # 過去のセッションを agent のセッションに繋ぎ直す（下記）
+kairan hook stop # Claude Code の Stop hook 本体（settings.json から呼ばれる。手で叩くものではない）
 ```
 
 ### `kairan relink`
@@ -143,7 +178,8 @@ kairan relink    # 過去のセッションを agent のセッションに繋ぎ
 | `reuseTab` | `KAIRAN_REUSE_TAB` | `true` | 自動オープン・通知クリック時に既存の kairan タブを再利用する（Chrome 系 / Safari。初回に macOS の自動化許可が必要。`false` で常に新規タブ） |
 | `shutdownGraceMs` | `KAIRAN_SHUTDOWN_GRACE_MS` | `5000` | 全接続 0 になってから自動停止するまでの猶予 |
 | `archiveGraceMs` | `KAIRAN_ARCHIVE_GRACE_MS` | `10000` | デーモン起動後、生きている agent が接続し直すのを待つ時間。これを過ぎても接続の無い active セッションは archive する |
-| `feedbackWaitMs` | `KAIRAN_FEEDBACK_WAIT_MS` | `1200000`（20 分） | `request_review` / `ask_user` の 1 回の待機時間。timeout 後は agent が再呼び出しで待ち直す |
+| `feedbackWaitMs` | `KAIRAN_FEEDBACK_WAIT_MS` | `240000`（4 分） | ブロックして待つ API（`/api/feedback/wait`）で待ち時間の指定が無かったときの既定。MCP tool call はハーネス側で 270 秒で切られるため、それより短くしてある |
+| `hookWaitMs` | `KAIRAN_HOOK_WAIT_MS` | `3600000`（60 分） | Stop hook が回答を待つ時間。`settings.json` の hook `timeout`（秒）より短くしておく |
 
 設定ファイルのパス自体は `KAIRAN_CONFIG_PATH` で変更できる。
 

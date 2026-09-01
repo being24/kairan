@@ -1519,7 +1519,8 @@ function buildAskForm(ask: Ask): HTMLElement {
 
   for (const question of ask.questions) {
     const box = el("div", { class: "ask-question" });
-    const heading = el("div", { class: "ask-question-text" });
+    const headingId = `ask${ask.id}-${question.id}-label`;
+    const heading = el("div", { class: "ask-question-text", id: headingId });
     if (question.header != null) heading.append(el("span", { class: "badge" }, question.header));
     heading.append(question.question);
     box.append(heading);
@@ -1555,6 +1556,7 @@ function buildAskForm(ask: Ask): HTMLElement {
       class: "ask-free",
       rows: "1",
       placeholder: "自由記述（選択の補足、または別案）",
+      "aria-labelledby": headingId,
     });
     free.addEventListener("input", () => {
       const answer = answers.get(question.id);
