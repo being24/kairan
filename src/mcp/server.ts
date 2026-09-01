@@ -3,7 +3,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 import packageJson from "../../package.json" with { type: "json" };
 import { loadConfig } from "../config.ts";
-import type { AskQuestion, FeedbackBundle, PublishResponse } from "../shared/types.ts";
+import { describeBundle, FEEDBACK_GUIDANCE } from "../feedback-text.ts";
+import { claudeAgentSessionKey } from "../shared/session-id.ts";
+import type { AskQuestion, PublishResponse } from "../shared/types.ts";
 import { daemonBaseUrl } from "../shared/url.ts";
 import { DaemonClient } from "./daemon-client.ts";
 import { resolvePublishSource } from "./input.ts";
@@ -147,40 +149,6 @@ const replyCommentInputSchema = z.object({
 });
 
 /** agent が読む形に整える（内部IDや配信管理フィールドを外へ出さない） */
-function describeBundle(bundle: FeedbackBundle) {
-  return {
-    reviews: bundle.reviews.map((entry) => ({
-      summary: entry.review.summary === "" ? null : entry.review.summary,
-      comments: entry.comments.map((comment) => ({
-        commentId: comment.id,
-        file: comment.fileName,
-        rev: comment.rev,
-        quote: comment.anchor?.exact ?? null,
-        comment: comment.body,
-      })),
-      replies: entry.replies.map((reply) => ({
-        commentId: reply.commentId,
-        originalComment: reply.commentBody,
-        reply: reply.body,
-      })),
-    })),
-    answeredQuestions: bundle.answeredAsks.map((ask) => ({
-      answers: ask.questions.map((question) => {
-        const answer = ask.answers?.find((a) => a.questionId === question.id);
-        return {
-          question: question.question,
-          selected: answer?.selected ?? [],
-          freeText: answer?.freeText ?? null,
-        };
-      }),
-    })),
-  };
-}
-
-const FEEDBACK_GUIDANCE =
-  "Human feedback received. Address each comment, then respond with reply_comment " +
-  "(use commentId; set resolve=true once handled) and publish updated revisions as needed.\n";
-
 export async function runMcpServer(): Promise<void> {
   const config = loadConfig();
   const client = new DaemonClient(config);
@@ -222,7 +190,7 @@ export async function runMcpServer(): Promise<void> {
   const agentSessionKey =
     process.env.CLAUDE_CODE_SESSION_ID == null
       ? undefined
-      : `claude:${process.env.CLAUDE_CODE_SESSION_ID}`;
+      : claudeAgentSessionKey(process.env.CLAUDE_CODE_SESSION_ID);
 
   const resolveSessionId = async (requestedId?: string): Promise<string> => {
     await client.ensureDaemon();

@@ -13,6 +13,8 @@ Usage:
   kairan restart         Restart the daemon (reflects code/config changes)
   kairan stop            Stop the running daemon
   kairan status          Show daemon status
+  kairan hook stop       Claude Code Stop hook: inject the human's answers into the session
+                         (register it with asyncRewake so the session is never blocked)
   kairan relink          Reconnect past sessions to their agent sessions using Claude Code history,
                          and drop archived sessions that never got any content
                          (--dry-run to only print what it would do, --keep-empty to keep them)
@@ -101,6 +103,26 @@ async function relinkSessions(args: string[]): Promise<void> {
   });
 }
 
+/**
+ * Claude Code の Stop hook 本体。注入する本文は stderr へ出し、exit 2 で
+ * セッションを起こす（stdout は捨てられる）
+ */
+async function runHook(args: string[]): Promise<void> {
+  if (args[0] !== "stop") {
+    console.log(USAGE);
+    process.exit(1);
+  }
+  const { runStopHook } = await import("./hook.ts");
+  process.exitCode = await runStopHook({
+    readStdin: () => Bun.stdin.text(),
+    fetchFn: fetch,
+    config: loadConfig(),
+    writeErr: async (text) => {
+      await Bun.write(Bun.stderr, text);
+    },
+  });
+}
+
 async function showStatus(): Promise<void> {
   const config = loadConfig();
   const base = daemonBaseUrl(config.host, config.port);
@@ -139,6 +161,9 @@ async function main(): Promise<void> {
       break;
     case "status":
       await showStatus();
+      break;
+    case "hook":
+      await runHook(process.argv.slice(3));
       break;
     case "relink":
       await relinkSessions(process.argv.slice(3));
