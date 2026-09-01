@@ -17,6 +17,7 @@ import {
   unwrapMarks,
   wrapSlices,
 } from "./anchor.ts";
+import { asksForFile } from "./ask-view.ts";
 import { applyFavicon, computeFaviconStatus, computeTabTitle } from "./favicon.ts";
 
 type ViewMode = "rendered" | "source" | "diff";
@@ -51,6 +52,11 @@ interface State {
   follow: boolean;
   comments: FileComment[];
   openAsks: Ask[];
+  /**
+   * この画面で回答し終えた質問。回答直後に「何を答えたか」を残すためだけに持つ
+   * （送信のレスポンスより先に ask:changed が届くため、DOM の差し替えでは消える）
+   */
+  answeredAsks: Map<number, Ask>;
   reviewSummary: string;
   reviewDraftCount: number;
   commentsOpen: boolean;
@@ -75,6 +81,7 @@ const state: State = {
   follow: true,
   comments: [],
   openAsks: [],
+  answeredAsks: new Map(),
   reviewSummary: "",
   reviewDraftCount: 0,
   commentsOpen: false,
@@ -232,7 +239,7 @@ async function loadAsks(): Promise<void> {
   const sessionId = state.currentSessionId;
   if (sessionId == null) {
     state.openAsks = [];
-    renderAsks();
+    renderDocAsk();
     return;
   }
   let asks: Ask[];
@@ -244,7 +251,7 @@ async function loadAsks(): Promise<void> {
   if (generation !== asksGeneration) return;
   if (sessionId !== state.currentSessionId) return;
   state.openAsks = asks;
-  renderAsks();
+  renderDocAsk();
 }
 
 let reviewGeneration = 0;
@@ -348,7 +355,9 @@ async function loadView(): Promise<void> {
   state.revisions = revisions;
   renderViewChrome(file);
   await renderViewBody(file, generation);
-  if (generation === viewGeneration) void loadComments();
+  if (generation !== viewGeneration) return;
+  renderDocAsk();
+  void loadComments();
 }
 
 // --- 描画: セッションリスト ------------------------------------------------
@@ -1439,36 +1448,61 @@ function openSelectionComposer(): void {
   textarea.focus();
 }
 
-// --- 質問カード -------------------------------------------------------------
+// --- 文書内の質問フォーム ---------------------------------------------------
 
-function renderAsks(): void {
-  const container = document.getElementById("asks");
-  if (container == null) return;
-  container.replaceChildren();
-  if (state.currentSessionId == null) return;
-  for (const ask of state.openAsks) {
-    container.append(buildAskCard(ask));
-  }
+/** 質問フォームを差し込む先。差分表示には出さない（本文が並ぶ列が無い） */
+function askMountPoint(): HTMLElement | null {
+  if (state.viewMode === "diff") return null;
+  return document.querySelector<HTMLElement>(".doc-main") ?? document.getElementById("view");
 }
 
-function buildAskCard(ask: Ask): HTMLElement {
-  const card = el("section", { class: "ask-card" });
-  const title = el("div", { class: "ask-title" }, el("span", {}, "agent からの質問"));
-  if (ask.fileId != null) {
-    const file = state.files.find((f) => f.id === ask.fileId);
-    if (file != null) {
-      const chip = el(
-        "button",
-        { class: "ask-file-chip", type: "button" },
-        file.title ?? file.name,
-      );
-      chip.addEventListener("click", () => {
-        void selectFile(file.name);
-      });
-      title.append(chip);
+/**
+ * 質問は文書の続きとして本文の末尾に出す。独立したパネルとして常時載せると
+ * 本文の表示面積を食い、開くたびに邪魔になる
+ */
+function renderDocAsk(): void {
+  document.getElementById("doc-ask")?.remove();
+  const file = currentFile();
+  if (file == null) return;
+  const shown = asksForFile(file.id, state.openAsks, state.answeredAsks.values());
+  if (shown.answered.length === 0 && shown.open.length === 0) return;
+  const mount = askMountPoint();
+  if (mount == null) return;
+
+  const container = el("section", { id: "doc-ask", class: "doc-ask" });
+  for (const ask of shown.answered) container.append(buildAnsweredAsk(ask));
+  for (const ask of shown.open) container.append(buildAskForm(ask));
+  mount.append(container);
+}
+
+function askHeading(text: string): HTMLElement {
+  return el("div", { class: "ask-title" }, el("span", {}, text));
+}
+
+/** 回答済みの表示。リロードすると消える（回答履歴は API を持たない） */
+function buildAnsweredAsk(ask: Ask): HTMLElement {
+  const block = el("div", { class: "ask-block ask-block-answered" }, askHeading("回答しました"));
+  for (const question of ask.questions) {
+    const answer = ask.answers?.find((a) => a.questionId === question.id);
+    const box = el(
+      "div",
+      { class: "ask-question" },
+      el("div", { class: "ask-question-text" }, question.question),
+    );
+    const selected = answer?.selected ?? [];
+    if (selected.length > 0) {
+      box.append(el("div", { class: "ask-answer-value" }, selected.join(" / ")));
     }
+    if (answer?.freeText != null && answer.freeText !== "") {
+      box.append(el("div", { class: "ask-answer-note" }, answer.freeText));
+    }
+    block.append(box);
   }
-  card.append(title);
+  return block;
+}
+
+function buildAskForm(ask: Ask): HTMLElement {
+  const form = el("div", { class: "ask-block" }, askHeading("agent からの質問"));
 
   const answers = new Map<string, { selected: Set<string>; freeText: string }>();
   for (const question of ask.questions) {
@@ -1532,7 +1566,7 @@ function buildAskCard(ask: Ask): HTMLElement {
       if (!submit.disabled) submit.click();
     });
     box.append(free);
-    card.append(box);
+    form.append(box);
   }
   updateSubmit();
 
@@ -1547,14 +1581,27 @@ function buildAskCard(ask: Ask): HTMLElement {
         freeText: freeText === "" ? null : freeText,
       };
     });
-    void postJson(`/api/asks/${ask.id}/answer`, { answers: payload })
-      .then(() => Promise.all([loadAsks(), loadSessions(), loadFiles()]))
+    void postJson<Ask>(`/api/asks/${ask.id}/answer`, { answers: payload })
+      .then((answered) => {
+        state.answeredAsks.set(answered.id, answered);
+        return Promise.all([loadAsks(), loadSessions(), loadFiles()]);
+      })
       .catch(() => {
         submit.disabled = false;
       });
   });
-  card.append(el("div", { class: "ask-actions" }, submit));
-  return card;
+
+  const withdraw = el("button", { class: "btn-ghost", type: "button" }, "取り下げ");
+  withdraw.addEventListener("click", () => {
+    withdraw.disabled = true;
+    void postJson(`/api/asks/${ask.id}/cancel`)
+      .then(() => Promise.all([loadAsks(), loadSessions(), loadFiles()]))
+      .catch(() => {
+        withdraw.disabled = false;
+      });
+  });
+  form.append(el("div", { class: "ask-actions" }, withdraw, submit));
+  return form;
 }
 
 // --- レビューバー -----------------------------------------------------------
@@ -1978,7 +2025,6 @@ function buildLayout(): void {
         el(
           "div",
           { class: "view-col" },
-          el("div", { id: "asks", class: "asks" }),
           el("div", { id: "view-chrome", class: "view-chrome" }),
           el("div", { id: "view", class: "pane-body" }),
           el("div", { id: "review-bar", class: "review-bar hidden" }),
