@@ -38,22 +38,23 @@ export function describeBundle(bundle: FeedbackBundle) {
   };
 }
 
-const byteLength = (text: string): number => new TextEncoder().encode(text).length;
-
 const render = (bundle: FeedbackBundle): string =>
   `${FEEDBACK_GUIDANCE}${JSON.stringify(describeBundle(bundle), null, 2)}\n`;
 
 /**
  * Stop hook の stderr へ載せる本文。上限に収まらない場合は項目単位で落とす
  * （JSON の途中で切ると読めない入力になる）。
- * clipped=true のときは全文が届いていないため、呼び出し側は受領確定してはならない
+ * clipped=true のときは全文が届いていないため、呼び出し側は受領確定してはならない。
+ *
+ * limitChars は文字数（`string.length`）で見る。Claude Code の hook 出力は
+ * 10,000 文字で上限処理されるため、バイト数ではなく文字数で揃える
  */
 export function formatFeedbackForHook(
   bundle: FeedbackBundle,
-  limitBytes: number,
+  limitChars: number,
 ): { text: string; clipped: boolean } {
   const full = render(bundle);
-  if (byteLength(full) <= limitBytes) return { text: full, clipped: false };
+  if (full.length <= limitChars) return { text: full, clipped: false };
 
   // レビューは list_feedback で取り直せる一方、質問の回答はこのターンで効く判断材料。
   // 落とすならレビューから落とす
@@ -63,7 +64,7 @@ export function formatFeedbackForHook(
     if (reviews.length > 0) reviews = reviews.slice(0, -1);
     else answeredAsks = answeredAsks.slice(0, -1);
     const text = `${render({ reviews, answeredAsks })}${CLIP_NOTICE}`;
-    if (byteLength(text) <= limitBytes) return { text, clipped: true };
+    if (text.length <= limitChars) return { text, clipped: true };
   }
   return { text: `${FEEDBACK_GUIDANCE}${CLIP_NOTICE}`, clipped: true };
 }

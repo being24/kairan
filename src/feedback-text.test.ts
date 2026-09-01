@@ -46,8 +46,6 @@ function answeredAsk(index: number): FeedbackBundle["answeredAsks"][number] {
   };
 }
 
-const byteLength = (text: string): number => new TextEncoder().encode(text).length;
-
 describe("describeBundle", () => {
   test("空の要約は null にし、回答は質問文と対で並べる", () => {
     const described = describeBundle({
@@ -79,7 +77,7 @@ describe("formatFeedbackForHook", () => {
   test("上限に収まればそのまま全文を返す", () => {
     const result = formatFeedbackForHook(
       { reviews: [reviewEntry(1, "直して")], answeredAsks: [answeredAsk(1)] },
-      16 * 1024,
+      10_000,
     );
     expect(result.clipped).toBe(false);
     expect(result.text.startsWith(FEEDBACK_GUIDANCE)).toBe(true);
@@ -87,7 +85,7 @@ describe("formatFeedbackForHook", () => {
   });
 
   test("フィードバックが空でも整形できる", () => {
-    const result = formatFeedbackForHook({ reviews: [], answeredAsks: [] }, 16 * 1024);
+    const result = formatFeedbackForHook({ reviews: [], answeredAsks: [] }, 10_000);
     expect(result.clipped).toBe(false);
     expect(result.text).toContain('"reviews": []');
   });
@@ -97,12 +95,12 @@ describe("formatFeedbackForHook", () => {
       reviews: [reviewEntry(1, "あ".repeat(400)), reviewEntry(2, "い".repeat(400))],
       answeredAsks: [answeredAsk(1)],
     };
-    const full = formatFeedbackForHook(bundle, 16 * 1024);
-    const limit = byteLength(full.text) - 100;
+    const full = formatFeedbackForHook(bundle, 10_000);
+    const limit = full.text.length - 100;
 
     const result = formatFeedbackForHook(bundle, limit);
     expect(result.clipped).toBe(true);
-    expect(byteLength(result.text)).toBeLessThanOrEqual(limit);
+    expect(result.text.length).toBeLessThanOrEqual(limit);
     expect(result.text).toContain("list_feedback");
     expect(result.text).toContain("どちらにする?");
   });
@@ -118,16 +116,21 @@ describe("formatFeedbackForHook", () => {
     expect(result.text).toContain("list_feedback");
   });
 
-  test("上限はバイト数で見る（ASCII なら同じ文字数でも収まる）", () => {
+  test("上限は文字数で見る（CJK と ASCII で同じ文字数なら同じ結果になる）", () => {
+    const limit = formatFeedbackForHook(
+      { reviews: [reviewEntry(1, "a".repeat(300))], answeredAsks: [] },
+      10_000,
+    ).text.length;
+
     const cjk = formatFeedbackForHook(
       { reviews: [reviewEntry(1, "あ".repeat(300))], answeredAsks: [] },
-      1200,
+      limit,
     );
     const ascii = formatFeedbackForHook(
       { reviews: [reviewEntry(1, "a".repeat(300))], answeredAsks: [] },
-      1200,
+      limit,
     );
-    expect(cjk.clipped).toBe(true);
+    expect(cjk.clipped).toBe(false);
     expect(ascii.clipped).toBe(false);
   });
 });

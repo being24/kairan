@@ -5,10 +5,12 @@ import type { FeedbackBundle } from "./shared/types.ts";
 import { daemonBaseUrl } from "./shared/url.ts";
 
 /**
- * stderr に書ける量の上限。Stop hook の stderr はそのままモデルの入力になるため、
- * 1ターン分の注入として無理のない大きさに抑える
+ * stderr に書ける文字数の上限。Claude Code の hook 出力は 10,000 文字を超えると
+ * ファイルへ退避されプレビューに置き換わる（stdout 系の出力で確認済みの仕様。
+ * asyncRewake の stderr にも同じ処理が及ぶかは未確認だが、hook 出力全般に対する
+ * 上限として書かれているため安全側に合わせる）
  */
-const STDERR_LIMIT_BYTES = 16 * 1024;
+const STDERR_LIMIT_CHARS = 10_000;
 
 const PROBE_TIMEOUT_MS = 2000;
 
@@ -83,7 +85,7 @@ export async function runStopHook(deps: StopHookDeps): Promise<number> {
   }
   if (claimed.status !== "feedback" || claimed.bundle == null || claimed.claimId == null) return 0;
 
-  const { text, clipped } = formatFeedbackForHook(claimed.bundle, STDERR_LIMIT_BYTES);
+  const { text, clipped } = formatFeedbackForHook(claimed.bundle, STDERR_LIMIT_CHARS);
   await deps.writeErr(text);
 
   // 受領確定は「モデルへ届けきれた」ことの記録。全文を載せられなかったときは
