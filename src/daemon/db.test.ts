@@ -492,15 +492,19 @@ describe("feedback delivery", () => {
 
   test("answered asks are delivered once via the bundle", () => {
     const { store } = makeStore();
-    const { session } = seedFile(store);
-    const ask = store.createAsk(session.id, null, [
-      {
-        id: "q1",
-        question: "どっち?",
-        options: [{ label: "A" }, { label: "B" }],
-        multiSelect: false,
-      },
-    ]);
+    const session = store.createSession();
+    const published = store.publish(session.id, "plan.md", "markdown", "# 計画", {
+      questions: [
+        {
+          id: "q1",
+          question: "どっち?",
+          options: [{ label: "A" }, { label: "B" }],
+          multiSelect: false,
+        },
+      ],
+    });
+    const ask = published.ask;
+    if (ask == null) throw new Error("ask should exist");
     store.answerAsk(ask.id, [{ questionId: "q1", selected: ["A"], freeText: null }]);
     const bundle = store.takeUndeliveredFeedback(session.id);
     expect(bundle.answeredAsks).toHaveLength(1);
@@ -519,50 +523,47 @@ describe("asks", () => {
     },
   ];
 
-  test("createAsk stores questions and starts open", () => {
+  function seedAsk(store: Store, name = "plan.md") {
+    const session = store.createSession();
+    const published = store.publish(session.id, name, "markdown", "# 計画", { questions });
+    if (published.ask == null) throw new Error("ask should exist");
+    return { session, file: published.file, ask: published.ask };
+  }
+
+  test("publish で置かれた質問は open で始まり、文書に紐づく", () => {
     const { store } = makeStore();
-    const { session, file } = seedFile(store);
-    const ask = store.createAsk(session.id, file.id, questions);
+    const { session, file, ask } = seedAsk(store);
     expect(ask.status).toBe("open");
     expect(ask.fileId).toBe(file.id);
     expect(store.getAsk(ask.id)?.questions[0]?.question).toBe("方針は?");
     expect(store.listOpenAsks(session.id)).toHaveLength(1);
   });
 
-  test("findOpenAsk matches identical questions for idempotent re-wait", () => {
+  test("別の文書の質問は互いに独立している", () => {
     const { store } = makeStore();
-    const { session } = seedFile(store);
-    const ask = store.createAsk(session.id, null, questions);
-    expect(store.findOpenAsk(session.id, questions, null)?.id).toBe(ask.id);
-    const altered = questions.map((q) => ({ ...q, question: "別の質問" }));
-    expect(store.findOpenAsk(session.id, altered, null)).toBeNull();
-  });
-
-  test("findOpenAsk distinguishes the target file (same text, different file)", () => {
-    const { store } = makeStore();
-    const { session, file } = seedFile(store);
-    const sessionWide = store.createAsk(session.id, null, questions);
-    const fileScoped = store.createAsk(session.id, file.id, questions);
-    expect(store.findOpenAsk(session.id, questions, null)?.id).toBe(sessionWide.id);
-    expect(store.findOpenAsk(session.id, questions, file.id)?.id).toBe(fileScoped.id);
-    expect(store.findOpenAsk(session.id, questions, 9999)).toBeNull();
+    const session = store.createSession();
+    const a = store.publish(session.id, "a.md", "markdown", "A", { questions });
+    const b = store.publish(session.id, "b.md", "markdown", "B", { questions });
+    expect(a.ask?.id).not.toBe(b.ask?.id);
+    expect(store.getOpenAsk(a.file.id)?.id).toBe(a.ask?.id);
+    expect(store.getOpenAsk(b.file.id)?.id).toBe(b.ask?.id);
+    expect(store.listOpenAsks(session.id)).toHaveLength(2);
   });
 
   test("answerAsk records answers; cancelAsk closes without answers", () => {
     const { store, clock } = makeStore();
-    const { session } = seedFile(store);
-    const a = store.createAsk(session.id, null, questions);
+    const { session, ask } = seedAsk(store);
     clock.now = 3_000_000;
-    const answered = store.answerAsk(a.id, [
+    const answered = store.answerAsk(ask.id, [
       { questionId: "q1", selected: ["案2"], freeText: "補足あり" },
     ]);
     expect(answered.status).toBe("answered");
     expect(answered.answeredAt).toBe(3_000_000);
-    expect(() => store.answerAsk(a.id, [])).toThrow(/not open/);
+    expect(() => store.answerAsk(ask.id, [])).toThrow(/not open/);
 
-    const b = store.createAsk(session.id, null, questions);
-    store.cancelAsk(b.id);
-    expect(store.getAsk(b.id)?.status).toBe("cancelled");
+    const second = store.publish(session.id, "other.md", "markdown", "# 別", { questions });
+    store.cancelAsk(second.ask?.id ?? 0);
+    expect(store.getAsk(second.ask?.id ?? 0)?.status).toBe("cancelled");
     expect(store.listOpenAsks(session.id)).toHaveLength(0);
   });
 });

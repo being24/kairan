@@ -43,6 +43,11 @@ export interface PublishRequest {
   open?: boolean;
   /** publish 元のファイルの絶対パス。省略は「元ファイルなし」として既存の記録を消す */
   sourcePath?: string;
+  /**
+   * 文書に埋め込む質問。省略は「今ある質問に触らない」、空配列は取り下げ。
+   * 同じ文書に渡すたびに置き換わるので、質問が積み上がることはない
+   */
+  questions?: AskQuestion[];
 }
 
 export interface PublishResponse {
@@ -52,6 +57,8 @@ export interface PublishResponse {
   revision: number;
   /** 送信済みで agent 未受領のフィードバック件数（list_feedback で回収を促す） */
   pendingFeedback: number;
+  /** 文書に付いている未回答の質問。無ければ null */
+  askId: number | null;
 }
 
 /** 選択テキストの引用アンカー。null 相当（アンカーなし）はファイル全体コメント */

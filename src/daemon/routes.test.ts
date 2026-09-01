@@ -593,6 +593,23 @@ const testQuestions = [
   },
 ];
 
+async function publishWithQuestions(
+  app: ReturnType<typeof makeApp>["app"],
+  sessionId: string,
+  name: string,
+) {
+  const res = await publish(app, {
+    sessionId,
+    name,
+    format: "markdown",
+    content: "# 本文",
+    questions: testQuestions,
+  });
+  const body = (await res.json()) as { fileId: number; askId: number | null };
+  if (body.askId == null) throw new Error("publish with questions should return an askId");
+  return { fileId: body.fileId, askId: body.askId };
+}
+
 async function seedSessionFile(app: ReturnType<typeof makeApp>["app"]) {
   const session = await createSession(app);
   const res = await publish(app, {
@@ -659,20 +676,12 @@ describe("comment api", () => {
     expect(updated?.replies).toHaveLength(1);
   });
 
-  test("ask with the same questions but a different file gets its own card", async () => {
+  test("同じ質問でも文書が違えば別のフォームになる", async () => {
     const { app } = makeApp();
     const { session } = await seedSessionFile(app);
-    const sessionWide = (await (
-      await postJson(app, "/api/asks", { sessionId: session.id, questions: testQuestions })
-    ).json()) as Ask;
-    const fileScoped = (await (
-      await postJson(app, "/api/asks", {
-        sessionId: session.id,
-        fileName: "report.md",
-        questions: testQuestions,
-      })
-    ).json()) as Ask;
-    expect(fileScoped.id).not.toBe(sessionWide.id);
+    const first = await publishWithQuestions(app, session.id, "report.md");
+    const second = await publishWithQuestions(app, session.id, "other.md");
+    expect(second.askId).not.toBe(first.askId);
     const listed = (await (await app.request(`/api/sessions/${session.id}/asks`)).json()) as Ask[];
     expect(listed).toHaveLength(2);
   });
@@ -761,73 +770,75 @@ describe("review api", () => {
   });
 });
 
-describe("ask api", () => {
-  test("create → answer → wait returns the answers; identical create reuses the ask", async () => {
+describe("文書に埋め込んだ質問", () => {
+  test("publish で質問を置き、回答すると answered になる", async () => {
     const { app } = makeApp();
     const { session } = await seedSessionFile(app);
-    const ask = (await (
-      await postJson(app, "/api/asks", { sessionId: session.id, questions: testQuestions })
-    ).json()) as Ask;
-    expect(ask.status).toBe("open");
+    const first = await publishWithQuestions(app, session.id, "report.md");
+    const listed = (await (await app.request(`/api/sessions/${session.id}/asks`)).json()) as Ask[];
+    expect(listed[0]?.id).toBe(first.askId);
+    expect(listed[0]?.status).toBe("open");
 
-    const again = (await (
-      await postJson(app, "/api/asks", { sessionId: session.id, questions: testQuestions })
-    ).json()) as Ask;
-    expect(again.id).toBe(ask.id);
-
-    const waiting = postJson(app, `/api/asks/${ask.id}/wait`, { timeoutMs: 3000 });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const answerRes = await postJson(app, `/api/asks/${ask.id}/answer`, {
+    const answerRes = await postJson(app, `/api/asks/${first.askId}/answer`, {
       answers: [{ questionId: "q1", selected: ["案2"], freeText: null }],
     });
     expect(answerRes.status).toBe(200);
-
-    const result = (await (await waiting).json()) as { status: string; ask: Ask };
-    expect(result.status).toBe("answered");
-    expect(result.ask.answers?.[0]?.selected).toEqual(["案2"]);
+    const answered = (await answerRes.json()) as Ask;
+    expect(answered.status).toBe("answered");
+    expect(answered.answers?.[0]?.selected).toEqual(["案2"]);
   });
 
-  test("answer must cover every question with a selection or free text", async () => {
+  test("同じ質問で publish し直してもフォームは増えない", async () => {
     const { app } = makeApp();
     const { session } = await seedSessionFile(app);
-    const ask = (await (
-      await postJson(app, "/api/asks", { sessionId: session.id, questions: testQuestions })
-    ).json()) as Ask;
-    const res = await postJson(app, `/api/asks/${ask.id}/answer`, {
-      answers: [{ questionId: "q1", selected: [], freeText: null }],
-    });
-    expect(res.status).toBe(400);
-  });
-
-  test("ask with fileName ties the ask to the file", async () => {
-    const { app } = makeApp();
-    const { session, fileId } = await seedSessionFile(app);
-    const ask = (await (
-      await postJson(app, "/api/asks", {
-        sessionId: session.id,
-        fileName: "report.md",
-        questions: testQuestions,
-      })
-    ).json()) as Ask;
-    expect(ask.fileId).toBe(fileId);
+    const first = await publishWithQuestions(app, session.id, "report.md");
+    const again = await publishWithQuestions(app, session.id, "report.md");
+    expect(again.askId).toBe(first.askId);
     const listed = (await (await app.request(`/api/sessions/${session.id}/asks`)).json()) as Ask[];
     expect(listed).toHaveLength(1);
   });
 
-  test("answered ask delivered via wait does not reappear in the feedback bundle", async () => {
-    const { app, store } = makeApp();
+  test("questions: [] は質問の取り下げ", async () => {
+    const { app } = makeApp();
     const { session } = await seedSessionFile(app);
-    const ask = (await (
-      await postJson(app, "/api/asks", { sessionId: session.id, questions: testQuestions })
-    ).json()) as Ask;
-    await postJson(app, `/api/asks/${ask.id}/answer`, {
-      answers: [{ questionId: "q1", selected: ["案1"], freeText: null }],
+    await publishWithQuestions(app, session.id, "report.md");
+    const withdrawn = (await (
+      await publish(app, {
+        sessionId: session.id,
+        name: "report.md",
+        format: "markdown",
+        content: "v3",
+        questions: [],
+      })
+    ).json()) as { askId: number | null };
+    expect(withdrawn.askId).toBeNull();
+    const listed = (await (await app.request(`/api/sessions/${session.id}/asks`)).json()) as Ask[];
+    expect(listed).toHaveLength(0);
+  });
+
+  test("questions を渡さない publish は今ある質問に触らない", async () => {
+    const { app } = makeApp();
+    const { session } = await seedSessionFile(app);
+    const first = await publishWithQuestions(app, session.id, "report.md");
+    const bodyOnly = (await (
+      await publish(app, {
+        sessionId: session.id,
+        name: "report.md",
+        format: "markdown",
+        content: "v3",
+      })
+    ).json()) as { askId: number | null };
+    expect(bodyOnly.askId).toBe(first.askId);
+  });
+
+  test("回答は全問に選択か自由記述が要る", async () => {
+    const { app } = makeApp();
+    const { session } = await seedSessionFile(app);
+    const { askId } = await publishWithQuestions(app, session.id, "report.md");
+    const res = await postJson(app, `/api/asks/${askId}/answer`, {
+      answers: [{ questionId: "q1", selected: [], freeText: null }],
     });
-    const result = (await (
-      await postJson(app, `/api/asks/${ask.id}/wait`, { timeoutMs: 5 })
-    ).json()) as { status: string };
-    expect(result.status).toBe("answered");
-    expect(store.takeUndeliveredFeedback(session.id).answeredAsks).toHaveLength(0);
+    expect(res.status).toBe(400);
   });
 });
 
@@ -835,7 +846,7 @@ describe("feedback badges", () => {
   test("sessions list carries openAskCount and reviewWaiting", async () => {
     const { app } = makeApp();
     const { session } = await seedSessionFile(app);
-    await postJson(app, "/api/asks", { sessionId: session.id, questions: testQuestions });
+    await publishWithQuestions(app, session.id, "report.md");
     const waiting = postJson(app, "/api/feedback/wait", { sessionId: session.id, timeoutMs: 500 });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const sessions = (await (await app.request("/api/sessions")).json()) as Array<
@@ -853,11 +864,7 @@ describe("feedback badges", () => {
     store.createDraftComment(fileId, 1, null, "open");
     store.submitReview(session.id);
     store.createDraftComment(fileId, 1, null, "draft2");
-    await postJson(app, "/api/asks", {
-      sessionId: session.id,
-      fileName: "report.md",
-      questions: testQuestions,
-    });
+    await publishWithQuestions(app, session.id, "report.md");
     const files = (await (await app.request(`/api/sessions/${session.id}/files`)).json()) as Array<{
       openCommentCount: number;
       draftCommentCount: number;
@@ -930,17 +937,7 @@ describe("session management", () => {
     const { app, store } = makeApp();
     const session = await createSession(app);
     await post(app, `/api/sessions/${session.id}/archive`);
-    await post(app, "/api/asks", {
-      sessionId: session.id,
-      questions: [
-        {
-          id: "q1",
-          question: "どっち?",
-          options: [{ label: "A" }, { label: "B" }],
-          multiSelect: false,
-        },
-      ],
-    });
+    await publishWithQuestions(app, session.id, "plan.md");
     expect(store.getSession(session.id)?.status).toBe("active");
   });
 
@@ -989,17 +986,7 @@ describe("削除", () => {
     const { app, store } = makeApp();
     const { session, fileId } = await seed(app);
     await post(app, `/api/files/${fileId}/comments`, { rev: 1, anchor: null, body: "指摘" });
-    await post(app, "/api/asks", {
-      sessionId: session.id,
-      questions: [
-        {
-          id: "q1",
-          question: "どっち?",
-          options: [{ label: "A" }, { label: "B" }],
-          multiSelect: false,
-        },
-      ],
-    });
+    await publishWithQuestions(app, session.id, "plan.md");
 
     expect((await post(app, `/api/sessions/${session.id}/delete`)).status).toBe(200);
     expect(store.getSession(session.id)).toBeNull();
@@ -1021,27 +1008,6 @@ describe("削除", () => {
     const { app } = makeApp();
     const { session } = await seed(app);
     const waiting = post(app, "/api/feedback/wait", { sessionId: session.id, timeoutMs: 5000 });
-    await Bun.sleep(20);
-    await post(app, `/api/sessions/${session.id}/delete`);
-    expect((await (await waiting).json()) as { status: string }).toEqual({ status: "deleted" });
-  });
-
-  test("回答待ちの質問が消えたら deleted を返す", async () => {
-    const { app } = makeApp();
-    const { session } = await seed(app);
-    const askRes = await post(app, "/api/asks", {
-      sessionId: session.id,
-      questions: [
-        {
-          id: "q1",
-          question: "どっち?",
-          options: [{ label: "A" }, { label: "B" }],
-          multiSelect: false,
-        },
-      ],
-    });
-    const ask = (await askRes.json()) as Ask;
-    const waiting = post(app, `/api/asks/${ask.id}/wait`, { timeoutMs: 5000 });
     await Bun.sleep(20);
     await post(app, `/api/sessions/${session.id}/delete`);
     expect((await (await waiting).json()) as { status: string }).toEqual({ status: "deleted" });

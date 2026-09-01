@@ -1023,17 +1023,6 @@ export class Store {
 
   // --- asks ---
 
-  createAsk(sessionId: string, fileId: number | null, questions: AskQuestion[]): Ask {
-    if (this.getSession(sessionId) == null) throw new Error(`unknown session: ${sessionId}`);
-    const row = this.db
-      .query<AskRow, [string, number | null, string, number]>(
-        "INSERT INTO asks (session_id, file_id, status, questions, created_at) VALUES (?, ?, 'open', ?, ?) RETURNING *",
-      )
-      .get(sessionId, fileId, JSON.stringify(questions), this.now());
-    if (row == null) throw new Error("insert into asks returned no row");
-    return toAsk(row);
-  }
-
   getAsk(askId: number): Ask | null {
     const row = this.db.query<AskRow, [number]>("SELECT * FROM asks WHERE id = ?").get(askId);
     return row == null ? null : toAsk(row);
@@ -1086,20 +1075,6 @@ export class Store {
     return { ask: toAsk(row), changed: true };
   }
 
-  /**
-   * timeout 後の再呼び出しで同一質問の open ask を再利用する（重複カード防止）。
-   * 対象ファイルも一致条件に含める（同一文面でも別ファイル宛は別カード）
-   */
-  findOpenAsk(sessionId: string, questions: AskQuestion[], fileId: number | null): Ask | null {
-    const serialized = JSON.stringify(questions);
-    const row = this.db
-      .query<AskRow, [string, string, number | null]>(
-        "SELECT * FROM asks WHERE session_id = ? AND status = 'open' AND questions = ? AND file_id IS ?",
-      )
-      .get(sessionId, serialized, fileId);
-    return row == null ? null : toAsk(row);
-  }
-
   answerAsk(askId: number, answers: AskAnswer[]): Ask {
     const changed = this.db
       .query(
@@ -1116,11 +1091,6 @@ export class Store {
     this.db
       .query("UPDATE asks SET status = 'cancelled' WHERE id = ? AND status = 'open'")
       .run(askId);
-  }
-
-  /** ask/wait 経由で直接回答を受け取った場合に、bundle での二重配信を防ぐ */
-  markAskDelivered(askId: number): void {
-    this.db.query("UPDATE asks SET delivered_at = ? WHERE id = ?").run(this.now(), askId);
   }
 
   countDraftComments(fileId: number): number {

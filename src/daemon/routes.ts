@@ -90,6 +90,22 @@ const fileNameSchema = z
     message: "file name must not contain path separators",
   });
 
+const askQuestionSchema = z.object({
+  id: z.string().min(1).max(64),
+  question: z.string().min(1).max(4000),
+  header: z.string().max(32).optional(),
+  options: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(300),
+        description: z.string().max(2000).optional(),
+      }),
+    )
+    .min(1)
+    .max(8),
+  multiSelect: z.boolean(),
+});
+
 const publishSchema = z.object({
   sessionId: z.string().min(1),
   name: fileNameSchema,
@@ -105,6 +121,8 @@ const publishSchema = z.object({
       message: "sourcePath must be an absolute path",
     })
     .nullish(),
+  // 省略は「今ある質問に触らない」、空配列は取り下げ
+  questions: z.array(askQuestionSchema).max(8).optional(),
 });
 
 const labelSchema = z.string().max(200);
@@ -147,28 +165,6 @@ const replySchema = z.object({
 
 const summarySchema = z.object({ summary: z.string().max(20000) });
 
-const askQuestionSchema = z.object({
-  id: z.string().min(1).max(64),
-  question: z.string().min(1).max(4000),
-  header: z.string().max(32).optional(),
-  options: z
-    .array(
-      z.object({
-        label: z.string().min(1).max(300),
-        description: z.string().max(2000).optional(),
-      }),
-    )
-    .min(1)
-    .max(8),
-  multiSelect: z.boolean(),
-});
-
-const askCreateSchema = z.object({
-  sessionId: z.string().min(1),
-  fileName: fileNameSchema.optional(),
-  questions: z.array(askQuestionSchema).min(1).max(8),
-});
-
 const askAnswerSchema = z.object({
   answers: z.array(
     z.object({
@@ -181,15 +177,6 @@ const askAnswerSchema = z.object({
 
 const waitSchema = z.object({
   sessionId: z.string().min(1),
-  timeoutMs: z
-    .number()
-    .int()
-    .min(1)
-    .max(30 * 60 * 1000)
-    .optional(),
-});
-
-const askWaitSchema = z.object({
   timeoutMs: z
     .number()
     .int()
@@ -408,7 +395,7 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/publish", async (c) => {
     const parsed = publishSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { sessionId, name, format, content, title, open, sourcePath } = parsed.data;
+    const { sessionId, name, format, content, title, open, sourcePath, questions } = parsed.data;
 
     const session = store.getSession(sessionId);
     if (session == null) return c.json({ error: `unknown session: ${sessionId}` }, 404);
@@ -434,6 +421,7 @@ export function createApp(deps: AppDeps): Hono {
     const result = store.publish(sessionId, name, format, content, {
       title,
       sourcePath: sourcePath ?? null,
+      ...(questions == null ? {} : { questions: questions as AskQuestion[] }),
     });
     const url = fileUrl(sessionId, name);
 
@@ -447,6 +435,10 @@ export function createApp(deps: AppDeps): Hono {
       title: result.file.title,
     });
 
+    if (result.askChanged) {
+      hub.broadcast({ type: "ask:changed", sessionId });
+    }
+
     if (config.notifyOn === "all" || result.isNew) {
       const label = result.file.title ?? name;
       deps.notify(
@@ -454,6 +446,15 @@ export function createApp(deps: AppDeps): Hono {
         result.isNew ? `新着: ${label}` : `更新 (rev ${result.revision}): ${label}`,
         url,
       );
+    }
+
+    if (result.askChanged && result.ask != null) {
+      deps.notify(
+        "kairan",
+        `質問があります (${result.ask.questions.length}問): ${result.file.title ?? name}`,
+        url,
+      );
+      surfaceToHuman(sessionId, url);
     }
 
     const shouldOpen = decideOpen({
@@ -474,6 +475,7 @@ export function createApp(deps: AppDeps): Hono {
       fileId: result.file.id,
       revision: result.revision,
       pendingFeedback: store.countUndeliveredFeedback(sessionId),
+      askId: result.ask?.id ?? null,
     });
   });
 
@@ -792,39 +794,6 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(store.listOpenAsks(session.id));
   });
 
-  app.post("/api/asks", async (c) => {
-    const parsed = askCreateSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { sessionId, fileName, questions } = parsed.data;
-    const session = store.getSession(sessionId);
-    if (session == null) return c.json({ error: `unknown session: ${sessionId}` }, 404);
-    // 質問も「agent が動いた」合図なので、畳まれていたら戻す（publish と同じ扱い）
-    if (session.status === "archived") {
-      store.activateSession(sessionId);
-      hub.broadcast({ type: "session:activated", sessionId });
-    }
-    let fileId: number | null = null;
-    if (fileName != null) {
-      const file = store.getFile(sessionId, fileName);
-      if (file == null) return c.json({ error: `unknown file: ${fileName}` }, 404);
-      fileId = file.id;
-    }
-    // timeout 後の再呼び出し（同一質問）は既存カードを増やさず待ち直す
-    const existing = store.findOpenAsk(sessionId, questions as AskQuestion[], fileId);
-    if (existing != null) return c.json(existing);
-
-    const ask = store.createAsk(sessionId, fileId, questions as AskQuestion[]);
-    hub.broadcast({ type: "ask:changed", sessionId });
-    const url = fileName != null ? fileUrl(sessionId, fileName) : sessionUrl(sessionId);
-    deps.notify(
-      "kairan",
-      `質問があります (${questions.length}問): セッション ${session.label ?? sessionId}`,
-      url,
-    );
-    surfaceToHuman(sessionId, url);
-    return c.json(ask);
-  });
-
   app.post("/api/asks/:id/answer", async (c) => {
     const ask = store.getAsk(Number(c.req.param("id")));
     if (ask == null) return c.json({ error: "unknown ask" }, 404);
@@ -855,36 +824,6 @@ export function createApp(deps: AppDeps): Hono {
     hub.broadcast({ type: "ask:changed", sessionId: ask.sessionId });
     signals.notify(askKey(ask.id));
     return c.json({ ok: true });
-  });
-
-  app.post("/api/asks/:id/wait", async (c) => {
-    const askId = Number(c.req.param("id"));
-    const ask = store.getAsk(askId);
-    if (ask == null) return c.json({ error: "unknown ask" }, 404);
-    const parsed = askWaitSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-
-    const finish = (): Response | null => {
-      const current = store.getAsk(askId);
-      // 待っている間に人間が質問ごと削除することがある。404 では「取得に失敗した」と
-      // 区別できないため、消えたことが分かる結果を返す
-      if (current == null) return c.json({ status: "deleted" });
-      if (current.status === "answered") {
-        store.markAskDelivered(askId);
-        return c.json({ status: "answered", ask: current });
-      }
-      if (current.status === "cancelled") return c.json({ status: "cancelled" });
-      return null;
-    };
-
-    const immediate = finish();
-    if (immediate != null) return immediate;
-    await signals.wait(
-      askKey(askId),
-      parsed.data.timeoutMs ?? config.feedbackWaitMs,
-      c.req.raw.signal,
-    );
-    return finish() ?? c.json({ status: "pending" });
   });
 
   // --- feedback: wait / take (MCP ランチャー向け) ---

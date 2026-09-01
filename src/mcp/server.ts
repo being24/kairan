@@ -28,6 +28,42 @@ function errorResult(err: unknown) {
   };
 }
 
+/**
+ * 質問 ID を並び順から決定的に振る。同じ入力が同じ JSON になることで、
+ * デーモン側が「同じ質問での再 publish」を判定して作り直しを避けられる
+ */
+function toQuestions(input: z.infer<typeof questionsInputSchema>): AskQuestion[] {
+  return input.map((question, index) => ({
+    id: `q${index + 1}`,
+    question: question.question,
+    ...(question.header == null ? {} : { header: question.header }),
+    options: question.options,
+    multiSelect: question.multiSelect ?? false,
+  }));
+}
+
+const questionsInputSchema = z
+  .array(
+    z.object({
+      question: z.string().min(1).describe("The full question to ask the human"),
+      header: z.string().optional().describe("Short chip label shown above the question"),
+      options: z
+        .array(
+          z.object({
+            label: z.string().min(1).describe("Concise choice label"),
+            description: z
+              .string()
+              .optional()
+              .describe("What this option means, including trade-offs"),
+          }),
+        )
+        .min(1)
+        .max(8),
+      multiSelect: z.boolean().optional().describe("Allow selecting multiple options"),
+    }),
+  )
+  .max(8);
+
 const publishInputSchema = z.object({
   path: z
     .string()
@@ -55,6 +91,13 @@ const publishInputSchema = z.object({
     .boolean()
     .optional()
     .describe("Force-open (true) or suppress opening (false) the browser for this publish"),
+  questions: questionsInputSchema
+    .optional()
+    .describe(
+      "Questions to embed as a form inside this document. Omit to leave existing questions " +
+        "untouched; pass an empty array to withdraw them. Re-publishing with questions replaces " +
+        "the document's unanswered set, so questions never pile up",
+    ),
 });
 
 const listFilesInputSchema = z.object({
@@ -76,47 +119,6 @@ const requestReviewInputSchema = z.object({
     .max(1800)
     .optional()
     .describe("How long to wait before returning 'no feedback yet' (default: config value)"),
-});
-
-const askUserInputSchema = z.object({
-  questions: z
-    .array(
-      z.object({
-        question: z.string().min(1).describe("The full question to ask the human"),
-        header: z.string().optional().describe("Short chip label shown above the question"),
-        options: z
-          .array(
-            z.object({
-              label: z.string().min(1).describe("Concise choice label"),
-              description: z
-                .string()
-                .optional()
-                .describe("What this option means, including trade-offs"),
-            }),
-          )
-          .min(1)
-          .max(8),
-        multiSelect: z.boolean().optional().describe("Allow selecting multiple options"),
-      }),
-    )
-    .min(1)
-    .max(8)
-    .describe("Questions shown together on one card; the human answers all before submitting"),
-  file: z
-    .string()
-    .optional()
-    .describe("Published file name this question is about (badges that file in the sidebar)"),
-  session: z
-    .string()
-    .optional()
-    .describe("Session ID to ask in. Defaults to this process's own session"),
-  timeout_seconds: z
-    .number()
-    .int()
-    .min(5)
-    .max(1800)
-    .optional()
-    .describe("How long to wait before returning 'not answered yet' (default: config value)"),
 });
 
 const startSessionInputSchema = z.object({
@@ -293,7 +295,10 @@ export async function runMcpServer(): Promise<void> {
       title: "Publish a document to the browser",
       description:
         "Publish a markdown or HTML document (file path or inline content) to the kairan browser viewer. " +
-        "Publishing the same name again creates a new revision with a viewable diff. Returns the URL",
+        "Publishing the same name again creates a new revision with a viewable diff. Returns the URL. " +
+        "Pass `questions` to embed a decision form in the document; this does NOT block — the human's " +
+        "answers are injected into your session by kairan's Stop hook, or picked up by your next " +
+        "kairan tool call if the hook is not installed",
       inputSchema: publishInputSchema,
     },
     async (input) => {
@@ -329,6 +334,7 @@ export async function runMcpServer(): Promise<void> {
             title: input.title,
             open: input.open,
             sourcePath: source.kind === "path" ? source.path : undefined,
+            ...(input.questions == null ? {} : { questions: toQuestions(input.questions) }),
           });
 
         const sessionId = await resolveSessionId(input.session);
@@ -401,65 +407,6 @@ export async function runMcpServer(): Promise<void> {
           "No feedback yet — the human is still reviewing. Call request_review again to continue waiting, " +
             "or proceed without feedback if appropriate.",
         );
-      } catch (err) {
-        return errorResult(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "ask_user",
-    {
-      title: "Ask the human to choose between options",
-      description:
-        "Show a question card with selectable options (plus a free-text field) in the kairan browser " +
-        "viewer and BLOCK until the human answers. Use this instead of guessing when a decision is " +
-        "the human's to make. On timeout it returns 'not answered yet' — call ask_user again with " +
-        "the SAME questions to keep waiting; the existing card is reused, not duplicated",
-      inputSchema: askUserInputSchema,
-    },
-    async (input, ctx) => {
-      try {
-        const sessionId = await resolveSessionId(input.session);
-        // 質問IDは並び順から決定的に振る。timeout 後に同じ入力で再呼び出しした際、
-        // 同一JSONになりデーモン側で既存カードが再利用される
-        const questions: AskQuestion[] = input.questions.map((question, index) => ({
-          id: `q${index + 1}`,
-          question: question.question,
-          ...(question.header == null ? {} : { header: question.header }),
-          options: question.options,
-          multiSelect: question.multiSelect ?? false,
-        }));
-        const ask = await client.createAsk(sessionId, input.file ?? null, questions);
-        try {
-          const timeoutMs =
-            input.timeout_seconds != null ? input.timeout_seconds * 1000 : config.feedbackWaitMs;
-          const result = await client.waitAsk(ask.id, timeoutMs, ctx.mcpReq.signal);
-          if (result.status === "answered" && result.ask != null) {
-            return textResult(
-              describeBundle({ reviews: [], answeredAsks: [result.ask] }).answeredQuestions[0],
-            );
-          }
-          if (result.status === "cancelled") {
-            return textResult("The question was dismissed in the browser without an answer.");
-          }
-          if (result.status === "deleted") {
-            return textResult(
-              "The human deleted the question (or the whole session) in the browser. " +
-                "Proceed without an answer, or ask again if you still need the decision.",
-            );
-          }
-          return textResult(
-            "Not answered yet. Call ask_user again with the same questions to keep waiting " +
-              "(the existing card is reused), or proceed if the decision can wait.",
-          );
-        } catch (err) {
-          // agent 側の中断（ユーザーの esc 等）では回答不能になったカードを片付ける
-          if (ctx.mcpReq.signal.aborted) {
-            void client.cancelAsk(ask.id).catch(() => {});
-          }
-          throw err;
-        }
       } catch (err) {
         return errorResult(err);
       }

@@ -3,8 +3,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { KairanConfig } from "../config.ts";
 import type {
-  Ask,
-  AskQuestion,
   CommentReply,
   FeedbackBundle,
   FileEntry,
@@ -230,26 +228,6 @@ export class DaemonClient {
 
   takeFeedback(sessionId: string): Promise<{ bundle: FeedbackBundle }> {
     return this.postJson("/api/feedback/take", { sessionId });
-  }
-
-  createAsk(sessionId: string, fileName: string | null, questions: AskQuestion[]): Promise<Ask> {
-    return this.postJson("/api/asks", {
-      sessionId,
-      ...(fileName == null ? {} : { fileName }),
-      questions,
-    });
-  }
-
-  waitAsk(
-    askId: number,
-    timeoutMs: number,
-    signal?: AbortSignal,
-  ): Promise<{ status: "answered" | "cancelled" | "pending" | "deleted"; ask?: Ask }> {
-    return this.postJson(`/api/asks/${askId}/wait`, { timeoutMs }, signal);
-  }
-
-  cancelAsk(askId: number): Promise<{ ok: boolean }> {
-    return this.postJson(`/api/asks/${askId}/cancel`, {});
   }
 
   replyComment(commentId: number, body: string, resolve: boolean): Promise<CommentReply> {
