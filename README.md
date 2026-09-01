@@ -74,7 +74,7 @@ args = ["mcp"]
 ```
 
 - `asyncRewake: true` が要る。hook はバックグラウンドで走り、回答が届いた時点でセッションを起こす（`timeout` は秒。`hookWaitMs` より長くしておく）
-- **止まっているデーモンを hook が起こすことはない**。質問もレビューも無い普通のターンでは即座に終わる
+- **止まっているデーモンを hook が起こすことはない**（デーモンが動いていなければ即座に終わる）。デーモンが動いている場合は、質問もレビューも無いターンでも hook は次の回答を待って `hookWaitMs`（既定 60 分）までバックグラウンドに留まる。agent のターン自体はブロックしない
 - **ターン終了時に `Stop hook error occurred · ctrl+o to see` と出るのは正常**。Claude Code は「モデルを起こす」合図に exit code 2 を使うため、成功時もエラー表示になる
 - hook を入れない場合も動く（回答は次の kairan tool call か `list_feedback` で回収される）。ただし人が答えたことに気付くのは agent が次に kairan を触ったときになる
 

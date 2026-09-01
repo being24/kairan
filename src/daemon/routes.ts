@@ -122,7 +122,15 @@ const publishSchema = z.object({
     })
     .nullish(),
   // 省略は「今ある質問に触らない」、空配列は取り下げ
-  questions: z.array(askQuestionSchema).max(8).optional(),
+  questions: z
+    .array(askQuestionSchema)
+    .max(8)
+    // id は回答の Map キーとしてブラウザ側で使われる。重複を通すと一方の回答が
+    // 両方の質問に配信される
+    .refine((questions) => new Set(questions.map((q) => q.id)).size === questions.length, {
+      message: "question ids must be unique",
+    })
+    .optional(),
 });
 
 const labelSchema = z.string().max(200);

@@ -943,6 +943,22 @@ describe("文書に埋め込んだ質問", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  test("同じ id の質問を複数渡すと拒否する（回答の Map キーが衝突するため）", async () => {
+    const { app } = makeApp();
+    const { session } = await seedSessionFile(app);
+    const res = await publish(app, {
+      sessionId: session.id,
+      name: "report.md",
+      format: "markdown",
+      content: "# 本文",
+      questions: [
+        { id: "same", question: "問1", options: [{ label: "案1" }], multiSelect: false },
+        { id: "same", question: "問2", options: [{ label: "案2" }], multiSelect: false },
+      ],
+    });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("feedback badges", () => {

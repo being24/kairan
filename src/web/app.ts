@@ -1517,9 +1517,11 @@ function buildAskForm(ask: Ask): HTMLElement {
     submit.disabled = !complete;
   };
 
-  for (const question of ask.questions) {
+  for (const [index, question] of ask.questions.entries()) {
     const box = el("div", { class: "ask-question" });
-    const headingId = `ask${ask.id}-${question.id}-label`;
+    // question.id は API 経由の自由な文字列（空白等を含み得る）なので、
+    // 空白区切りの ID 参照リストとして解釈される aria-labelledby には使えない
+    const headingId = `ask${ask.id}-q${index}-label`;
     const heading = el("div", { class: "ask-question-text", id: headingId });
     if (question.header != null) heading.append(el("span", { class: "badge" }, question.header));
     heading.append(question.question);
