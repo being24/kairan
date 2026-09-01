@@ -13,7 +13,7 @@ import { daemonBaseUrl, localBaseUrls } from "../shared/url.ts";
 import type { Store } from "./db.ts";
 import type { Hub } from "./hub.ts";
 import type { LocalFileOpener } from "./local-file.ts";
-import { askKey, reviewKey, type SignalHub } from "./waiters.ts";
+import { feedbackKey, type SignalHub } from "./waiters.ts";
 
 export interface AppDeps {
   store: Store;
@@ -257,22 +257,22 @@ export function createApp(deps: AppDeps): Hono {
   const sessionUrl = (sessionId: string): string =>
     `${daemonBaseUrl(config.host, config.port)}/${sessionId}`;
 
-  signals.onWaitersChanged = (key, count) => {
-    if (!key.startsWith("review:")) return;
-    hub.broadcast({
-      type: "review:waiting",
-      sessionId: key.slice("review:".length),
-      waiting: count > 0,
-    });
+  // レビュー依頼中のセッション。待機者数から導出すると、Stop hook が待っている
+  // 通常ターンでも点灯してしまう。レビュー送信とセッション削除だけで落とす
+  const reviewRequests = new Set<string>();
+
+  const setReviewRequested = (sessionId: string, requested: boolean): void => {
+    const changed = requested ? !reviewRequests.has(sessionId) : reviewRequests.delete(sessionId);
+    if (requested) reviewRequests.add(sessionId);
+    if (changed) hub.broadcast({ type: "review:waiting", sessionId, waiting: requested });
   };
 
   /**
    * 削除した対象を待っている agent を起こす。commit 後に呼ぶこと
    * （起こされた側は対象の存在を確認し直し、消えていれば "deleted" を返す）
    */
-  const releaseWaiters = (sessionId: string, askIds: number[]): void => {
-    for (const askId of askIds) signals.notify(askKey(askId));
-    signals.notify(reviewKey(sessionId));
+  const releaseWaiters = (sessionId: string): void => {
+    signals.notify(feedbackKey(sessionId));
   };
 
   // レビュー依頼・質問は人間の応答が必要なので、見ているタブが無ければ開き直す
@@ -366,8 +366,9 @@ export function createApp(deps: AppDeps): Hono {
     // 生存申告を先に閉じる。残したままだとデーモンが停止しなくなり、
     // launcher も消えたセッションへ張り直し続ける
     hub.closeAttachments(sessionId);
-    const { deletedAskIds } = store.deleteSession(sessionId);
-    releaseWaiters(sessionId, deletedAskIds);
+    store.deleteSession(sessionId);
+    reviewRequests.delete(sessionId);
+    releaseWaiters(sessionId);
     hub.broadcast({ type: "session:deleted", sessionId });
     return c.json({ ok: true });
   });
@@ -375,8 +376,8 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/files/:id/delete", (c) => {
     const file = store.getFileById(Number(c.req.param("id")));
     if (file == null) return c.json({ error: "unknown file" }, 404);
-    const { deletedAskIds } = store.deleteFile(file.id);
-    releaseWaiters(file.sessionId, deletedAskIds);
+    store.deleteFile(file.id);
+    releaseWaiters(file.sessionId);
     hub.broadcast({ type: "file:deleted", sessionId: file.sessionId, fileId: file.id });
     return c.json({ ok: true });
   });
@@ -387,7 +388,7 @@ export function createApp(deps: AppDeps): Hono {
       store.listSessions(includeArchived).map((session) => ({
         ...session,
         openAskCount: store.listOpenAsks(session.id).length,
-        reviewWaiting: signals.waiterCount(reviewKey(session.id)) > 0,
+        reviewWaiting: reviewRequests.has(session.id),
       })),
     );
   });
@@ -777,12 +778,32 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(store.setDraftReviewSummary(session.id, parsed.data.summary));
   });
 
+  /**
+   * レビューを依頼する。ブロックせずにバッジと通知だけを出し、送信された結果は
+   * Stop hook（`/api/feedback/claim`）か次の tool call で agent へ渡る。
+   * 先に人間が送っていたレビューが未受領で残っている場合は、依頼を立てずにそれを知らせる
+   * （立ててしまうと、その回収では落ちないバッジが残る）
+   */
+  app.post("/api/sessions/:id/review-request", (c) => {
+    const session = store.getSession(c.req.param("id"));
+    if (session == null) return c.json({ error: "unknown session" }, 404);
+    if (store.countUndeliveredReviews(session.id) > 0) {
+      return c.json({ status: "feedback-pending" });
+    }
+    setReviewRequested(session.id, true);
+    const url = sessionUrl(session.id);
+    deps.notify("kairan", `レビュー依頼: セッション ${session.label ?? session.id}`, url);
+    surfaceToHuman(session.id, url);
+    return c.json({ status: "requested" });
+  });
+
   app.post("/api/sessions/:id/review/submit", (c) => {
     const session = store.getSession(c.req.param("id"));
     if (session == null) return c.json({ error: "unknown session" }, 404);
     const review = store.submitReview(session.id);
+    setReviewRequested(session.id, false);
     hub.broadcast({ type: "feedback:changed", sessionId: session.id, fileId: null });
-    signals.notify(reviewKey(session.id));
+    signals.notify(feedbackKey(session.id));
     return c.json(review);
   });
 
@@ -811,9 +832,8 @@ export function createApp(deps: AppDeps): Hono {
     }
     const answered = store.answerAsk(ask.id, answers);
     hub.broadcast({ type: "ask:changed", sessionId: ask.sessionId });
-    signals.notify(askKey(ask.id));
     // ask_user が待っていない場合でも request_review / list_feedback 側で回収できるよう起こす
-    signals.notify(reviewKey(ask.sessionId));
+    signals.notify(feedbackKey(ask.sessionId));
     return c.json(answered);
   });
 
@@ -822,7 +842,6 @@ export function createApp(deps: AppDeps): Hono {
     if (ask == null) return c.json({ error: "unknown ask" }, 404);
     store.cancelAsk(ask.id);
     hub.broadcast({ type: "ask:changed", sessionId: ask.sessionId });
-    signals.notify(askKey(ask.id));
     return c.json({ ok: true });
   });
 
@@ -838,12 +857,16 @@ export function createApp(deps: AppDeps): Hono {
     if (store.countUndeliveredFeedback(sessionId) > 0) {
       return c.json({ status: "feedback", bundle: store.takeUndeliveredFeedback(sessionId) });
     }
-    if (signals.waiterCount(reviewKey(sessionId)) === 0) {
+    if (signals.waiterCount(feedbackKey(sessionId)) === 0) {
       const url = sessionUrl(sessionId);
       deps.notify("kairan", `レビュー依頼: セッション ${session.label ?? sessionId}`, url);
       surfaceToHuman(sessionId, url);
     }
-    await signals.wait(reviewKey(sessionId), timeoutMs ?? config.feedbackWaitMs, c.req.raw.signal);
+    await signals.wait(
+      feedbackKey(sessionId),
+      timeoutMs ?? config.feedbackWaitMs,
+      c.req.raw.signal,
+    );
     if (store.countUndeliveredFeedback(sessionId) > 0) {
       return c.json({ status: "feedback", bundle: store.takeUndeliveredFeedback(sessionId) });
     }

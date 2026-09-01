@@ -34,16 +34,24 @@ describe("SignalHub", () => {
     expect(hub.waiterCount("k")).toBe(0);
   });
 
-  test("onWaitersChanged reports transitions to and from zero", async () => {
+  test("releasePreviousWaiters は既存の待機を timeout と同じ扱いで解放する", async () => {
     const hub = new SignalHub();
-    const seen: Array<[string, number]> = [];
-    hub.onWaitersChanged = (key, count) => seen.push([key, count]);
-    const waiting = hub.wait("k", 1000);
+    const first = hub.wait("k", 10_000);
+    hub.releasePreviousWaiters("k");
+    expect(await first).toBe(false);
+    expect(hub.waiterCount("k")).toBe(0);
+
+    // 解放後に張り直した待機は、次の notify を受け取れる
+    const second = hub.wait("k", 10_000);
     hub.notify("k");
-    await waiting;
-    expect(seen).toEqual([
-      ["k", 1],
-      ["k", 0],
-    ]);
+    expect(await second).toBe(true);
+  });
+
+  test("releasePreviousWaiters は他のキーの待機に触らない", async () => {
+    const hub = new SignalHub();
+    const waiting = hub.wait("a", 20);
+    hub.releasePreviousWaiters("b");
+    expect(hub.waiterCount("a")).toBe(1);
+    expect(await waiting).toBe(false);
   });
 });

@@ -847,14 +847,49 @@ describe("feedback badges", () => {
     const { app } = makeApp();
     const { session } = await seedSessionFile(app);
     await publishWithQuestions(app, session.id, "report.md");
-    const waiting = postJson(app, "/api/feedback/wait", { sessionId: session.id, timeoutMs: 500 });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await postJson(app, `/api/sessions/${session.id}/review-request`, {});
     const sessions = (await (await app.request("/api/sessions")).json()) as Array<
       Session & { openAskCount: number; reviewWaiting: boolean }
     >;
     expect(sessions[0]?.openAskCount).toBe(1);
     expect(sessions[0]?.reviewWaiting).toBe(true);
-    await waiting;
+  });
+
+  test("レビュー依頼は送信で落ち、質問の回答だけを回収しても落ちない", async () => {
+    const { app, store } = makeApp();
+    const { session } = await seedSessionFile(app);
+    const { askId } = await publishWithQuestions(app, session.id, "report.md");
+    await postJson(app, `/api/sessions/${session.id}/review-request`, {});
+
+    // 質問の回答だけを回収しても、未提出のレビュー依頼は残る
+    await postJson(app, `/api/asks/${askId}/answer`, {
+      answers: [{ questionId: "q1", selected: ["案1"], freeText: null }],
+    });
+    store.takeUndeliveredFeedback(session.id);
+    const midway = (await (await app.request("/api/sessions")).json()) as Array<{
+      reviewWaiting: boolean;
+    }>;
+    expect(midway[0]?.reviewWaiting).toBe(true);
+
+    await postJson(app, `/api/sessions/${session.id}/review/submit`, {});
+    const after = (await (await app.request("/api/sessions")).json()) as Array<{
+      reviewWaiting: boolean;
+    }>;
+    expect(after[0]?.reviewWaiting).toBe(false);
+  });
+
+  test("未受領のレビューが残っている状態の依頼はバッジを立てずに知らせる", async () => {
+    const { app, store } = makeApp();
+    const { session, fileId } = await seedSessionFile(app);
+    store.createDraftComment(fileId, 1, null, "先に送った指摘");
+    await postJson(app, `/api/sessions/${session.id}/review/submit`, {});
+
+    const res = await postJson(app, `/api/sessions/${session.id}/review-request`, {});
+    expect((await res.json()) as { status: string }).toEqual({ status: "feedback-pending" });
+    const sessions = (await (await app.request("/api/sessions")).json()) as Array<{
+      reviewWaiting: boolean;
+    }>;
+    expect(sessions[0]?.reviewWaiting).toBe(false);
   });
 
   test("files list carries comment counts and hasOpenAsk", async () => {
