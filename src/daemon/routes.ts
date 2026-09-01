@@ -185,6 +185,30 @@ const waitSchema = z.object({
     .optional(),
 });
 
+const claimSchema = z.object({
+  agentSessionKey: z.string().min(1).max(200),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(1)
+    .max(60 * 60 * 1000)
+    .optional(),
+});
+
+const ackSchema = z.object({ claimId: z.string().min(1).max(200) });
+
+/** 取得済みだが受領確定していないフィードバック。ack されなければ捨てるだけ */
+interface FeedbackClaim {
+  sessionId: string;
+  reviewIds: number[];
+  askIds: number[];
+  createdAt: number;
+}
+
+// 受け取り手（hook）が死んだ claim を溜めないための寿命。DB は触っていないので、
+// 捨てても未受領のまま残り、次の tool call で再配信される
+const CLAIM_TTL_MS = 2 * 60 * 60 * 1000;
+
 const SSE_KEEPALIVE_MS = 15_000;
 
 // アセットは URL に版が入っているので、期限切れを待たずに新しい版へ移れる
@@ -260,6 +284,14 @@ export function createApp(deps: AppDeps): Hono {
   // レビュー依頼中のセッション。待機者数から導出すると、Stop hook が待っている
   // 通常ターンでも点灯してしまう。レビュー送信とセッション削除だけで落とす
   const reviewRequests = new Set<string>();
+
+  const claims = new Map<string, FeedbackClaim>();
+  const dropExpiredClaims = (): void => {
+    const cutoff = Date.now() - CLAIM_TTL_MS;
+    for (const [id, claim] of claims) {
+      if (claim.createdAt < cutoff) claims.delete(id);
+    }
+  };
 
   const setReviewRequested = (sessionId: string, requested: boolean): void => {
     const changed = requested ? !reviewRequests.has(sessionId) : reviewRequests.delete(sessionId);
@@ -857,11 +889,6 @@ export function createApp(deps: AppDeps): Hono {
     if (store.countUndeliveredFeedback(sessionId) > 0) {
       return c.json({ status: "feedback", bundle: store.takeUndeliveredFeedback(sessionId) });
     }
-    if (signals.waiterCount(feedbackKey(sessionId)) === 0) {
-      const url = sessionUrl(sessionId);
-      deps.notify("kairan", `レビュー依頼: セッション ${session.label ?? sessionId}`, url);
-      surfaceToHuman(sessionId, url);
-    }
     await signals.wait(
       feedbackKey(sessionId),
       timeoutMs ?? config.feedbackWaitMs,
@@ -874,6 +901,53 @@ export function createApp(deps: AppDeps): Hono {
     // 「まだレビュー中」と誤認して待ち続ける
     if (store.getSession(sessionId) == null) return c.json({ status: "deleted" });
     return c.json({ status: "pending" });
+  });
+
+  /**
+   * 未受領フィードバックを待って取得する。**受領確定はしない**。
+   * 届けきれたことを確認できた呼び出し側だけが /api/feedback/ack を叩く。
+   * ack されなければ未受領のまま残り、次の tool call で再配信される
+   */
+  app.post("/api/feedback/claim", async (c) => {
+    const parsed = claimSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+    const { agentSessionKey, timeoutMs } = parsed.data;
+    const session = store.getSessionByAgentSessionKey(agentSessionKey);
+    if (session == null) return c.json({ status: "no-session" });
+    const sessionId = session.id;
+
+    const claimIfAny = (): Response | null => {
+      const pending = store.peekUndeliveredFeedback(sessionId);
+      if (pending.reviewIds.length === 0 && pending.askIds.length === 0) return null;
+      const claimId = crypto.randomUUID();
+      claims.set(claimId, {
+        sessionId,
+        reviewIds: pending.reviewIds,
+        askIds: pending.askIds,
+        createdAt: Date.now(),
+      });
+      return c.json({ status: "feedback", claimId, bundle: pending.bundle });
+    };
+
+    dropExpiredClaims();
+    const immediate = claimIfAny();
+    if (immediate != null) return immediate;
+
+    // hook は毎ターンの Stop で走る。古い待機を解放しないと同じセッションの待機が積み上がる
+    signals.releasePreviousWaiters(feedbackKey(sessionId));
+    await signals.wait(feedbackKey(sessionId), timeoutMs ?? config.hookWaitMs, c.req.raw.signal);
+    if (store.getSession(sessionId) == null) return c.json({ status: "no-session" });
+    return claimIfAny() ?? c.json({ status: "pending" });
+  });
+
+  app.post("/api/feedback/ack", async (c) => {
+    const parsed = ackSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+    const claim = claims.get(parsed.data.claimId);
+    if (claim == null) return c.json({ error: "unknown claim" }, 404);
+    claims.delete(parsed.data.claimId);
+    store.markFeedbackDelivered(claim.reviewIds, claim.askIds);
+    return c.json({ ok: true });
   });
 
   app.post("/api/feedback/take", async (c) => {

@@ -28,6 +28,7 @@ function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
     archiveGraceMs: 10_000,
     reuseTab: true,
     feedbackWaitMs: 20 * 60 * 1000,
+    hookWaitMs: 60 * 60 * 1000,
     ...overrides,
   };
 }
@@ -760,13 +761,115 @@ describe("review api", () => {
     expect(json.bundle.reviews).toHaveLength(1);
   });
 
-  test("first review wait notifies and opens when no browser tab", async () => {
+  test("レビュー依頼で通知し、タブが無ければ開く", async () => {
     const { app, notified, opened } = makeApp({ reopenWhenNoTab: true });
     const { session } = await seedSessionFile(app);
     opened.length = 0;
-    await postJson(app, "/api/feedback/wait", { sessionId: session.id, timeoutMs: 5 });
+    const res = await postJson(app, `/api/sessions/${session.id}/review-request`, {});
+    expect(((await res.json()) as { status: string }).status).toBe("requested");
     expect(notified.some((n) => n.body.includes("レビュー"))).toBe(true);
     expect(opened).toHaveLength(1);
+  });
+
+  test("待つだけの /api/feedback/wait は人を呼ばない", async () => {
+    const { app, notified, opened } = makeApp({ reopenWhenNoTab: true });
+    const { session } = await seedSessionFile(app);
+    opened.length = 0;
+    notified.length = 0;
+    await postJson(app, "/api/feedback/wait", { sessionId: session.id, timeoutMs: 5 });
+    expect(notified).toHaveLength(0);
+    expect(opened).toHaveLength(0);
+  });
+});
+
+describe("フィードバックの claim と ack", () => {
+  const hookKey = "claude:hook-session";
+
+  async function seedKeyedSession(app: ReturnType<typeof makeApp>["app"]) {
+    const created = await app.request("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentSessionKey: hookKey }),
+    });
+    const session = (await created.json()) as Session;
+    await publish(app, {
+      sessionId: session.id,
+      name: "report.md",
+      format: "markdown",
+      content: "# 見出し\n本文です\n",
+    });
+    return session;
+  }
+
+  async function claim(app: ReturnType<typeof makeApp>["app"], timeoutMs = 5) {
+    const res = await postJson(app, "/api/feedback/claim", {
+      agentSessionKey: hookKey,
+      timeoutMs,
+    });
+    return (await res.json()) as {
+      status: string;
+      claimId?: string;
+      bundle?: FeedbackBundle;
+    };
+  }
+
+  test("ack しなければ未受領のまま残り、再 claim で同じ内容が返る", async () => {
+    const { app, store } = makeApp();
+    const session = await seedKeyedSession(app);
+    store.submitReview(session.id);
+
+    const first = await claim(app);
+    expect(first.status).toBe("feedback");
+    expect(first.bundle?.reviews).toHaveLength(1);
+
+    const again = await claim(app);
+    expect(again.status).toBe("feedback");
+    expect(again.claimId).not.toBe(first.claimId);
+    expect(again.bundle?.reviews).toHaveLength(1);
+  });
+
+  test("ack すると受領確定し、次の claim には出てこない", async () => {
+    const { app, store } = makeApp();
+    const session = await seedKeyedSession(app);
+    store.submitReview(session.id);
+
+    const claimed = await claim(app);
+    const acked = await postJson(app, "/api/feedback/ack", { claimId: claimed.claimId });
+    expect(acked.status).toBe(200);
+
+    expect((await claim(app)).status).toBe("pending");
+  });
+
+  test("待機中の claim は回答が入ると起きる", async () => {
+    const { app } = makeApp();
+    const session = await seedKeyedSession(app);
+    const { askId } = await publishWithQuestions(app, session.id, "plan.md");
+
+    const waiting = claim(app, 3000);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await postJson(app, `/api/asks/${askId}/answer`, {
+      answers: [{ questionId: "q1", selected: ["案1"], freeText: null }],
+    });
+
+    const result = await waiting;
+    expect(result.status).toBe("feedback");
+    expect(result.bundle?.answeredAsks).toHaveLength(1);
+  });
+
+  test("未知の claimId は 404", async () => {
+    const { app } = makeApp();
+    await seedKeyedSession(app);
+    const res = await postJson(app, "/api/feedback/ack", { claimId: "does-not-exist" });
+    expect(res.status).toBe(404);
+  });
+
+  test("鍵に対応するセッションが無ければ no-session", async () => {
+    const { app } = makeApp();
+    const res = await postJson(app, "/api/feedback/claim", {
+      agentSessionKey: "claude:never-started",
+      timeoutMs: 5,
+    });
+    expect(((await res.json()) as { status: string }).status).toBe("no-session");
   });
 });
 

@@ -18,6 +18,7 @@ function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
     archiveGraceMs: 10_000,
     reuseTab: true,
     feedbackWaitMs: 1_200_000,
+    hookWaitMs: 60 * 60 * 1000,
     ...overrides,
   };
 }

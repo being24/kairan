@@ -20,8 +20,19 @@ describe("loadConfig", () => {
       shutdownGraceMs: 5000,
       archiveGraceMs: 10_000,
       reuseTab: true,
-      feedbackWaitMs: 1_200_000,
+      feedbackWaitMs: 240_000,
+      hookWaitMs: 3_600_000,
     });
+  });
+
+  test("待ち時間は環境変数で伸ばせる", () => {
+    const config = loadConfig({
+      env: { KAIRAN_HOOK_WAIT_MS: "1800000", KAIRAN_FEEDBACK_WAIT_MS: "60000" },
+      home: HOME,
+      readConfigFile: () => null,
+    });
+    expect(config.hookWaitMs).toBe(1_800_000);
+    expect(config.feedbackWaitMs).toBe(60_000);
   });
 
   test("config file overrides defaults", () => {

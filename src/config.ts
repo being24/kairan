@@ -27,6 +27,7 @@ const configSchema = z
     archiveGraceMs: z.number().int().min(0),
     reuseTab: z.boolean(),
     feedbackWaitMs: z.number().int().min(1000),
+    hookWaitMs: z.number().int().min(1000),
   })
   .partial();
 
@@ -89,6 +90,7 @@ function fromEnv(env: Record<string, string | undefined>): z.infer<typeof config
     ["KAIRAN_ARCHIVE_GRACE_MS", "archiveGraceMs", "int"],
     ["KAIRAN_REUSE_TAB", "reuseTab", "bool"],
     ["KAIRAN_FEEDBACK_WAIT_MS", "feedbackWaitMs", "int"],
+    ["KAIRAN_HOOK_WAIT_MS", "hookWaitMs", "int"],
   ];
   for (const [envName, key, kind] of mappings) {
     const value = env[envName];
@@ -132,9 +134,13 @@ export function loadConfig(options: LoadConfigOptions = {}): KairanConfig {
     // これを過ぎても attach が無い active セッションは「agent が終了済み」とみなす
     archiveGraceMs: 10_000,
     reuseTab: true,
-    // Claude Code(stdio) の tool call idle 上限(実測系情報では約30分)より十分短くし、
-    // MCP 側が「まだFBなし」を受けて再度待ち直すループで長時間待機を実現する
-    feedbackWaitMs: 20 * 60 * 1000,
+    // Claude Code の MCP tool call は既定 270 秒がハード上限（progress notification では
+    // 伸びない）。そこに達するとツール呼び出しがエラーで落ちるため、内側で自分から返す。
+    // 使うのは hook を持たないクライアントがブロックして待つ場合だけ
+    feedbackWaitMs: 240 * 1000,
+    // Stop hook の待機。hook 側（settings.json の timeout）より短くして、
+    // kairan が必ず先に返るようにする
+    hookWaitMs: 60 * 60 * 1000,
   };
 
   const path = configFilePath(env, home);
