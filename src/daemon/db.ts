@@ -115,10 +115,24 @@ interface FileRow {
   latest_rev: number;
 }
 
+export interface PublishOptions {
+  title?: string;
+  sourcePath?: string | null;
+  /**
+   * 文書に埋め込む質問。省略は「今ある質問に触らない」（本文だけ直す再 publish で
+   * 回答待ちの質問が消えないように）。空配列は取り下げ
+   */
+  questions?: AskQuestion[];
+}
+
 export interface PublishResult {
   file: FileEntry;
   revision: number;
   isNew: boolean;
+  /** 文書の未回答の質問。質問が無い・取り下げた場合は null */
+  ask: Ask | null;
+  /** 質問セットが変わったか（通知を出すかの判断に使う） */
+  askChanged: boolean;
 }
 
 interface CommentRow {
@@ -322,6 +336,31 @@ export class Store {
     if (!columnsOf("files").includes("source_path")) {
       this.db.exec("ALTER TABLE files ADD COLUMN source_path TEXT");
     }
+    this.enforceOneOpenAskPerFile();
+  }
+
+  /**
+   * 質問は「1 文書につき未回答 1 セット」になった。旧設計では timeout ごとの再質問が
+   * 別レコードとして積み上がり、文書に紐づかない質問も作れたため、索引を張る前に畳む。
+   *
+   * 索引の存在そのものを移行済みの印にしている。印を持たずに毎回 UPDATE を走らせると、
+   * 再起動のたびに現役の未回答質問まで消える
+   */
+  private enforceOneOpenAskPerFile(): void {
+    const applied = this.db
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'asks_one_open_per_file'",
+      )
+      .get();
+    if (applied != null) return;
+    this.db.transaction(() => {
+      this.db.exec("UPDATE asks SET status = 'cancelled' WHERE status = 'open'");
+      // SQLite では NULL 同士が衝突しないため file_id が NULL の行は縛られないが、
+      // 文書に紐づかない質問を作る経路は残っていない
+      this.db.exec(
+        "CREATE UNIQUE INDEX asks_one_open_per_file ON asks(file_id) WHERE status = 'open'",
+      );
+    })();
   }
 
   /**
@@ -626,9 +665,9 @@ export class Store {
     name: string,
     format: DocFormat,
     content: string,
-    title?: string,
-    sourcePath?: string | null,
+    options: PublishOptions = {},
   ): PublishResult {
+    const { title, sourcePath, questions } = options;
     if (this.getSession(sessionId) == null) {
       throw new Error(`unknown session: ${sessionId}`);
     }
@@ -678,7 +717,19 @@ export class Store {
 
       const file = this.getFileById(fileId);
       if (file == null) throw new Error(`file ${fileId} vanished during publish`);
-      return { file, revision, isNew: existing == null };
+      // 本文と質問を同じトランザクションに入れる。分けると「新リビジョンはできたが
+      // 質問は旧状態」で API だけ失敗する状態が観測できてしまう
+      const swapped =
+        questions == null
+          ? { ask: this.getOpenAsk(fileId), changed: false }
+          : this.swapOpenAsk(sessionId, fileId, questions);
+      return {
+        file,
+        revision,
+        isNew: existing == null,
+        ask: swapped.ask,
+        askChanged: swapped.changed,
+      };
     });
     return run();
   }
@@ -997,6 +1048,44 @@ export class Store {
       .map(toAsk);
   }
 
+  /** 文書の未回答の質問。索引で 1 件に制限されているので配列にはしない */
+  getOpenAsk(fileId: number): Ask | null {
+    const row = this.db
+      .query<AskRow, [number]>("SELECT * FROM asks WHERE file_id = ? AND status = 'open'")
+      .get(fileId);
+    return row == null ? null : toAsk(row);
+  }
+
+  /**
+   * 文書の未回答の質問セットを差し替える。同一の質問で呼ばれた場合は作り直さない
+   * （同内容の再 publish で、人間が入力途中の回答を消さないため）。
+   * トランザクションの外から呼ばない（publish から呼ばれる前提）
+   */
+  private swapOpenAsk(
+    sessionId: string,
+    fileId: number,
+    questions: AskQuestion[],
+  ): { ask: Ask | null; changed: boolean } {
+    const serialized = JSON.stringify(questions);
+    const existing = this.db
+      .query<AskRow, [number]>("SELECT * FROM asks WHERE file_id = ? AND status = 'open'")
+      .get(fileId);
+    if (existing != null && existing.questions === serialized) {
+      return { ask: toAsk(existing), changed: false };
+    }
+    if (existing != null) {
+      this.db.query("UPDATE asks SET status = 'cancelled' WHERE id = ?").run(existing.id);
+    }
+    if (questions.length === 0) return { ask: null, changed: existing != null };
+    const row = this.db
+      .query<AskRow, [string, number, string, number]>(
+        "INSERT INTO asks (session_id, file_id, status, questions, created_at) VALUES (?, ?, 'open', ?, ?) RETURNING *",
+      )
+      .get(sessionId, fileId, serialized, this.now());
+    if (row == null) throw new Error("insert into asks returned no row");
+    return { ask: toAsk(row), changed: true };
+  }
+
   /**
    * timeout 後の再呼び出しで同一質問の open ask を再利用する（重複カード防止）。
    * 対象ファイルも一致条件に含める（同一文面でも別ファイル宛は別カード）
@@ -1059,10 +1148,57 @@ export class Store {
     return (reviews?.count ?? 0) + (asks?.count ?? 0);
   }
 
+  /**
+   * 未受領のフィードバックを返す。受領済みにはしないので、呼び出し側が配信を確定できた
+   * ときだけ `markFeedbackDelivered` を呼ぶ（届けきれなかったぶんを残すため）
+   */
+  peekUndeliveredFeedback(sessionId: string): {
+    bundle: FeedbackBundle;
+    reviewIds: number[];
+    askIds: number[];
+  } {
+    const run = this.db.transaction(() => {
+      const collected = this.collectUndeliveredFeedback(sessionId);
+      return {
+        bundle: { reviews: collected.reviews, answeredAsks: collected.askRows.map(toAsk) },
+        reviewIds: collected.reviews.map((entry) => entry.review.id),
+        askIds: collected.askRows.map((row) => row.id),
+      };
+    });
+    return run();
+  }
+
+  markFeedbackDelivered(reviewIds: number[], askIds: number[]): void {
+    const run = this.db.transaction(() => {
+      const timestamp = this.now();
+      for (const id of reviewIds) {
+        this.db.query("UPDATE reviews SET delivered_at = ? WHERE id = ?").run(timestamp, id);
+      }
+      for (const id of askIds) {
+        this.db.query("UPDATE asks SET delivered_at = ? WHERE id = ?").run(timestamp, id);
+      }
+    });
+    run();
+  }
+
   /** 未受領のフィードバックを返し、受領済みにマークする（1回だけ返る） */
   takeUndeliveredFeedback(sessionId: string): FeedbackBundle {
     const run = this.db.transaction((): FeedbackBundle => {
-      const timestamp = this.now();
+      const collected = this.collectUndeliveredFeedback(sessionId);
+      this.markFeedbackDelivered(
+        collected.reviews.map((entry) => entry.review.id),
+        collected.askRows.map((row) => row.id),
+      );
+      return { reviews: collected.reviews, answeredAsks: collected.askRows.map(toAsk) };
+    });
+    return run();
+  }
+
+  private collectUndeliveredFeedback(sessionId: string): {
+    reviews: FeedbackBundle["reviews"];
+    askRows: AskRow[];
+  } {
+    const run = this.db.transaction(() => {
       const reviewRows = this.db
         .query<ReviewRow, [string]>(
           "SELECT * FROM reviews WHERE session_id = ? AND state = 'submitted' AND delivered_at IS NULL ORDER BY submitted_at ASC, id ASC",
@@ -1090,9 +1226,6 @@ export class Store {
             fileName: row.file_name,
             commentBody: row.comment_body,
           }));
-        this.db
-          .query("UPDATE reviews SET delivered_at = ? WHERE id = ?")
-          .run(timestamp, reviewRow.id);
         return { review: toReview(reviewRow), comments, replies };
       });
 
@@ -1101,10 +1234,7 @@ export class Store {
           "SELECT * FROM asks WHERE session_id = ? AND status = 'answered' AND delivered_at IS NULL ORDER BY answered_at ASC, id ASC",
         )
         .all(sessionId);
-      for (const row of askRows) {
-        this.db.query("UPDATE asks SET delivered_at = ? WHERE id = ?").run(timestamp, row.id);
-      }
-      return { reviews, answeredAsks: askRows.map(toAsk) };
+      return { reviews, askRows };
     });
     return run();
   }

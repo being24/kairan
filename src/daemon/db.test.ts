@@ -254,14 +254,9 @@ describe("publish and revisions", () => {
   test("sourcePath: 毎回上書きされる（title と違い「未指定 = 維持」ではない）", () => {
     const { store } = makeStore();
     const session = store.createSession();
-    const withPath = store.publish(
-      session.id,
-      "report.md",
-      "markdown",
-      "v1",
-      undefined,
-      "/Users/me/report.md",
-    );
+    const withPath = store.publish(session.id, "report.md", "markdown", "v1", {
+      sourcePath: "/Users/me/report.md",
+    });
     expect(withPath.file.hasLocalFile).toBe(true);
     expect(store.getFileSourcePath(withPath.file.id)).toBe("/Users/me/report.md");
 
@@ -291,24 +286,21 @@ describe("publish and revisions", () => {
     `);
     const store = new Store(db);
     expect(store.getFile("old", "legacy.md")?.hasLocalFile).toBe(false);
-    const result = store.publish(
-      "old",
-      "new.md",
-      "markdown",
-      "# new",
-      undefined,
-      "/Users/me/new.md",
-    );
+    const result = store.publish("old", "new.md", "markdown", "# new", {
+      sourcePath: "/Users/me/new.md",
+    });
     expect(result.file.hasLocalFile).toBe(true);
   });
 
   test("title: undefined keeps existing, provided value replaces", () => {
     const { store } = makeStore();
     const session = store.createSession();
-    store.publish(session.id, "report.md", "markdown", "v1", "最初のタイトル");
+    store.publish(session.id, "report.md", "markdown", "v1", { title: "最初のタイトル" });
     const kept = store.publish(session.id, "report.md", "markdown", "v2");
     expect(kept.file.title).toBe("最初のタイトル");
-    const replaced = store.publish(session.id, "report.md", "markdown", "v3", "新タイトル");
+    const replaced = store.publish(session.id, "report.md", "markdown", "v3", {
+      title: "新タイトル",
+    });
     expect(replaced.file.title).toBe("新タイトル");
   });
 
@@ -572,5 +564,136 @@ describe("asks", () => {
     store.cancelAsk(b.id);
     expect(store.getAsk(b.id)?.status).toBe("cancelled");
     expect(store.listOpenAsks(session.id)).toHaveLength(0);
+  });
+});
+
+describe("文書に埋め込む質問", () => {
+  const questions = [
+    {
+      id: "q1",
+      question: "方針は?",
+      options: [{ label: "案1" }, { label: "案2" }],
+      multiSelect: false,
+    },
+  ];
+  const reworded = [
+    {
+      id: "q1",
+      question: "言い回しを変えた質問",
+      options: [{ label: "案1" }, { label: "案2" }],
+      multiSelect: false,
+    },
+  ];
+
+  test("publish で質問を渡すと文書に未回答の質問が付く", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    const result = store.publish(session.id, "plan.md", "markdown", "# 計画", { questions });
+    expect(result.askChanged).toBe(true);
+    expect(result.ask?.status).toBe("open");
+    expect(result.ask?.fileId).toBe(result.file.id);
+    expect(store.getOpenAsk(result.file.id)?.id).toBe(result.ask?.id);
+  });
+
+  test("同じ質問で publish し直しても作り直さない", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    const first = store.publish(session.id, "plan.md", "markdown", "v1", { questions });
+    const second = store.publish(session.id, "plan.md", "markdown", "v2", { questions });
+    expect(second.askChanged).toBe(false);
+    expect(second.ask?.id).toBe(first.ask?.id);
+  });
+
+  test("違う質問で publish すると前の質問を畳んで 1 件に置き換える", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    const first = store.publish(session.id, "plan.md", "markdown", "v1", { questions });
+    const second = store.publish(session.id, "plan.md", "markdown", "v2", { questions: reworded });
+    expect(second.askChanged).toBe(true);
+    expect(second.ask?.id).not.toBe(first.ask?.id);
+    expect(store.getAsk(first.ask?.id ?? 0)?.status).toBe("cancelled");
+    expect(store.listOpenAsks(session.id)).toHaveLength(1);
+  });
+
+  test("questions: [] は質問の取り下げ", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    store.publish(session.id, "plan.md", "markdown", "v1", { questions });
+    const withdrawn = store.publish(session.id, "plan.md", "markdown", "v2", { questions: [] });
+    expect(withdrawn.askChanged).toBe(true);
+    expect(withdrawn.ask).toBeNull();
+    expect(store.listOpenAsks(session.id)).toHaveLength(0);
+  });
+
+  test("questions を渡さない publish は今ある質問に触らない", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    const first = store.publish(session.id, "plan.md", "markdown", "v1", { questions });
+    const bodyOnly = store.publish(session.id, "plan.md", "markdown", "v2");
+    expect(bodyOnly.askChanged).toBe(false);
+    expect(bodyOnly.ask?.id).toBe(first.ask?.id);
+  });
+
+  test("積み上がっていた未回答の質問は移行で畳まれ、以後の再起動では畳まれない", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY, label TEXT, status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL
+      );
+      CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        name TEXT NOT NULL, format TEXT NOT NULL, title TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE asks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        file_id INTEGER REFERENCES files(id),
+        status TEXT NOT NULL DEFAULT 'open',
+        questions TEXT NOT NULL, answers TEXT,
+        created_at INTEGER NOT NULL, answered_at INTEGER, delivered_at INTEGER
+      );
+      INSERT INTO sessions (id, label, status, created_at, last_active_at)
+        VALUES ('old', NULL, 'active', 1, 1);
+      INSERT INTO files (id, session_id, name, format, title, created_at, updated_at)
+        VALUES (1, 'old', 'plan.md', 'markdown', NULL, 1, 1);
+      INSERT INTO asks (session_id, file_id, status, questions, created_at)
+        VALUES ('old', 1, 'open', '[]', 1), ('old', 1, 'open', '[]', 2), ('old', NULL, 'open', '[]', 3);
+    `);
+    const store = new Store(db);
+    expect(store.listOpenAsks("old")).toHaveLength(0);
+
+    const published = store.publish("old", "next.md", "markdown", "# 次", { questions });
+    expect(published.ask?.status).toBe("open");
+
+    const reopened = new Store(db);
+    expect(reopened.getOpenAsk(published.file.id)?.id).toBe(published.ask?.id);
+  });
+});
+
+describe("フィードバックの取得と受領確定", () => {
+  const questions = [
+    { id: "q1", question: "方針は?", options: [{ label: "案1" }], multiSelect: false },
+  ];
+
+  test("peek は受領済みにせず、markFeedbackDelivered で確定する", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    const published = store.publish(session.id, "plan.md", "markdown", "# 計画", { questions });
+    const askId = published.ask?.id ?? 0;
+    store.answerAsk(askId, [{ questionId: "q1", selected: ["案1"], freeText: null }]);
+
+    const first = store.peekUndeliveredFeedback(session.id);
+    expect(first.askIds).toEqual([askId]);
+    expect(store.countUndeliveredFeedback(session.id)).toBe(1);
+
+    const again = store.peekUndeliveredFeedback(session.id);
+    expect(again.askIds).toEqual([askId]);
+
+    store.markFeedbackDelivered(first.reviewIds, first.askIds);
+    expect(store.countUndeliveredFeedback(session.id)).toBe(0);
+    expect(store.peekUndeliveredFeedback(session.id).askIds).toEqual([]);
   });
 });

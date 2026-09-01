@@ -431,7 +431,10 @@ export function createApp(deps: AppDeps): Hono {
       );
     }
 
-    const result = store.publish(sessionId, name, format, content, title, sourcePath ?? null);
+    const result = store.publish(sessionId, name, format, content, {
+      title,
+      sourcePath: sourcePath ?? null,
+    });
     const url = fileUrl(sessionId, name);
 
     hub.broadcast({
