@@ -218,6 +218,10 @@ export class DaemonClient {
     return this.api<FileEntry[]>(`/api/sessions/${sessionId}/files`);
   }
 
+  requestReview(sessionId: string): Promise<{ status: "requested" | "feedback-pending" }> {
+    return this.postJson(`/api/sessions/${sessionId}/review-request`, {});
+  }
+
   waitFeedback(
     sessionId: string,
     timeoutMs: number,

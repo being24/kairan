@@ -114,13 +114,16 @@ const requestReviewInputSchema = z.object({
     .string()
     .optional()
     .describe("Session ID to collect feedback for. Defaults to this process's own session"),
-  timeout_seconds: z
+  wait_seconds: z
     .number()
     .int()
     .min(5)
     .max(1800)
     .optional()
-    .describe("How long to wait before returning 'no feedback yet' (default: config value)"),
+    .describe(
+      "Block for this long waiting for feedback instead of returning right away. " +
+        "Only pass this if your harness has no kairan Stop hook to inject the feedback for you",
+    ),
 });
 
 const startSessionInputSchema = z.object({
@@ -348,17 +351,34 @@ export async function runMcpServer(): Promise<void> {
     {
       title: "Request a review from the human",
       description:
-        "Ask the human to review the published documents in the browser, then BLOCK until they submit " +
-        "feedback (inline comments + an overall summary). Returns 'no feedback yet' on timeout — " +
-        "call request_review again to keep waiting; that is the normal pattern for long reviews",
+        "Ask the human to review the published documents in the browser. This does NOT block: " +
+        "their feedback (inline comments + an overall summary) is injected into your session by " +
+        "kairan's Stop hook once they submit it, or picked up by list_feedback if the hook is not " +
+        "installed. Do not call this repeatedly to poll",
       inputSchema: requestReviewInputSchema,
     },
     async (input, ctx) => {
       try {
         const sessionId = await resolveSessionId(input.session);
-        const timeoutMs =
-          input.timeout_seconds != null ? input.timeout_seconds * 1000 : config.feedbackWaitMs;
-        const result = await client.waitFeedback(sessionId, timeoutMs, ctx.mcpReq.signal);
+        if (input.wait_seconds == null) {
+          const requested = await client.requestReview(sessionId);
+          if (requested.status === "feedback-pending") {
+            return textResult(
+              "The human has already submitted feedback you have not read yet. " +
+                "Call list_feedback to collect it before asking for another review.",
+            );
+          }
+          return textResult(
+            "Asked the human to review. You are not blocked: their feedback will be injected " +
+              "into this session when they submit it. Continue with other work, or stop and wait " +
+              "for the injection. If nothing arrives, call list_feedback to check.",
+          );
+        }
+        const result = await client.waitFeedback(
+          sessionId,
+          input.wait_seconds * 1000,
+          ctx.mcpReq.signal,
+        );
         if (result.status === "feedback" && result.bundle != null) {
           return textResult(
             FEEDBACK_GUIDANCE + JSON.stringify(describeBundle(result.bundle), null, 2),

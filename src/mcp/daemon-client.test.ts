@@ -191,6 +191,23 @@ describe("api calls", () => {
     });
   });
 
+  test("requestReview はレビュー依頼だけを投げて待たない", async () => {
+    const requests: string[] = [];
+    const client = new DaemonClient(testConfig(tempDataDir()), {
+      fetchFn: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/healthz") return aliveHealthz.clone();
+        requests.push(path);
+        return Response.json({ status: "requested" });
+      },
+      spawnDaemon: () => {},
+      pollIntervalMs: 1,
+    });
+    const result = await client.requestReview("abc12345");
+    expect(result.status).toBe("requested");
+    expect(requests).toEqual(["/api/sessions/abc12345/review-request"]);
+  });
+
   test("api error responses become thrown errors with the server message", async () => {
     const client = new DaemonClient(testConfig(tempDataDir()), {
       fetchFn: async (url) => {
