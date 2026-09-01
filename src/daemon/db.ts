@@ -1119,27 +1119,16 @@ export class Store {
     reviewIds: number[];
     askIds: number[];
   } {
-    const run = this.db.transaction(() => {
-      const collected = this.collectUndeliveredFeedback(sessionId);
-      return {
-        bundle: { reviews: collected.reviews, answeredAsks: collected.askRows.map(toAsk) },
-        reviewIds: collected.reviews.map((entry) => entry.review.id),
-        askIds: collected.askRows.map((row) => row.id),
-      };
-    });
-    return run();
+    const collected = this.collectUndeliveredFeedback(sessionId);
+    return {
+      bundle: { reviews: collected.reviews, answeredAsks: collected.askRows.map(toAsk) },
+      reviewIds: collected.reviews.map((entry) => entry.review.id),
+      askIds: collected.askRows.map((row) => row.id),
+    };
   }
 
   markFeedbackDelivered(reviewIds: number[], askIds: number[]): void {
-    const run = this.db.transaction(() => {
-      const timestamp = this.now();
-      for (const id of reviewIds) {
-        this.db.query("UPDATE reviews SET delivered_at = ? WHERE id = ?").run(timestamp, id);
-      }
-      for (const id of askIds) {
-        this.db.query("UPDATE asks SET delivered_at = ? WHERE id = ?").run(timestamp, id);
-      }
-    });
+    const run = this.db.transaction(() => this.markFeedbackDeliveredInner(reviewIds, askIds));
     run();
   }
 
@@ -1147,7 +1136,7 @@ export class Store {
   takeUndeliveredFeedback(sessionId: string): FeedbackBundle {
     const run = this.db.transaction((): FeedbackBundle => {
       const collected = this.collectUndeliveredFeedback(sessionId);
-      this.markFeedbackDelivered(
+      this.markFeedbackDeliveredInner(
         collected.reviews.map((entry) => entry.review.id),
         collected.askRows.map((row) => row.id),
       );
@@ -1156,48 +1145,63 @@ export class Store {
     return run();
   }
 
+  private markFeedbackDeliveredInner(reviewIds: number[], askIds: number[]): void {
+    const timestamp = this.now();
+    if (reviewIds.length > 0) {
+      const placeholders = reviewIds.map(() => "?").join(",");
+      this.db
+        .query(`UPDATE reviews SET delivered_at = ? WHERE id IN (${placeholders})`)
+        .run(timestamp, ...reviewIds);
+    }
+    if (askIds.length > 0) {
+      const placeholders = askIds.map(() => "?").join(",");
+      this.db
+        .query(`UPDATE asks SET delivered_at = ? WHERE id IN (${placeholders})`)
+        .run(timestamp, ...askIds);
+    }
+  }
+
+  // 読み取り専用。呼び出し元（peek は単発、take は外側の transaction）が
+  // 一貫性の境界を持つため、ここでは transaction を持たない
   private collectUndeliveredFeedback(sessionId: string): {
     reviews: FeedbackBundle["reviews"];
     askRows: AskRow[];
   } {
-    const run = this.db.transaction(() => {
-      const reviewRows = this.db
-        .query<ReviewRow, [string]>(
-          "SELECT * FROM reviews WHERE session_id = ? AND state = 'submitted' AND delivered_at IS NULL ORDER BY submitted_at ASC, id ASC",
+    const reviewRows = this.db
+      .query<ReviewRow, [string]>(
+        "SELECT * FROM reviews WHERE session_id = ? AND state = 'submitted' AND delivered_at IS NULL ORDER BY submitted_at ASC, id ASC",
+      )
+      .all(sessionId);
+    const reviews = reviewRows.map((reviewRow) => {
+      const comments = this.db
+        .query<CommentRow & { file_name: string }, [number]>(
+          `SELECT c.*, f.name AS file_name FROM comments c
+           JOIN files f ON f.id = c.file_id
+           WHERE c.review_id = ? ORDER BY c.created_at ASC, c.id ASC`,
         )
-        .all(sessionId);
-      const reviews = reviewRows.map((reviewRow) => {
-        const comments = this.db
-          .query<CommentRow & { file_name: string }, [number]>(
-            `SELECT c.*, f.name AS file_name FROM comments c
-             JOIN files f ON f.id = c.file_id
-             WHERE c.review_id = ? ORDER BY c.created_at ASC, c.id ASC`,
-          )
-          .all(reviewRow.id)
-          .map((row) => ({ ...toComment(row, []), fileName: row.file_name }));
-        const replies = this.db
-          .query<ReplyRow & { file_name: string; comment_body: string }, [number]>(
-            `SELECT r.*, f.name AS file_name, c.body AS comment_body FROM comment_replies r
-             JOIN comments c ON c.id = r.comment_id
-             JOIN files f ON f.id = c.file_id
-             WHERE r.review_id = ? ORDER BY r.created_at ASC, r.id ASC`,
-          )
-          .all(reviewRow.id)
-          .map((row) => ({
-            ...toReply(row),
-            fileName: row.file_name,
-            commentBody: row.comment_body,
-          }));
-        return { review: toReview(reviewRow), comments, replies };
-      });
-
-      const askRows = this.db
-        .query<AskRow, [string]>(
-          "SELECT * FROM asks WHERE session_id = ? AND status = 'answered' AND delivered_at IS NULL ORDER BY answered_at ASC, id ASC",
+        .all(reviewRow.id)
+        .map((row) => ({ ...toComment(row, []), fileName: row.file_name }));
+      const replies = this.db
+        .query<ReplyRow & { file_name: string; comment_body: string }, [number]>(
+          `SELECT r.*, f.name AS file_name, c.body AS comment_body FROM comment_replies r
+           JOIN comments c ON c.id = r.comment_id
+           JOIN files f ON f.id = c.file_id
+           WHERE r.review_id = ? ORDER BY r.created_at ASC, r.id ASC`,
         )
-        .all(sessionId);
-      return { reviews, askRows };
+        .all(reviewRow.id)
+        .map((row) => ({
+          ...toReply(row),
+          fileName: row.file_name,
+          commentBody: row.comment_body,
+        }));
+      return { review: toReview(reviewRow), comments, replies };
     });
-    return run();
+
+    const askRows = this.db
+      .query<AskRow, [string]>(
+        "SELECT * FROM asks WHERE session_id = ? AND status = 'answered' AND delivered_at IS NULL ORDER BY answered_at ASC, id ASC",
+      )
+      .all(sessionId);
+    return { reviews, askRows };
   }
 }
