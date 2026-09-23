@@ -786,6 +786,12 @@ body.resizing {
 }
 
 /* LaTeX はソースそのものが本文。行番号を振り、長い行は折り返して横スクロールさせない */
+/* 読み物の幅制限（840px）は外し、エディタのように使える幅いっぱいに広げる */
+.markdown-body.latex-source,
+.doc-main:has(> .latex-source) #inline-file-comments {
+  max-width: none;
+}
+
 .markdown-body.latex-source pre.shiki {
   counter-reset: source-line;
   margin: 0;
@@ -793,8 +799,14 @@ body.resizing {
   overflow-wrap: anywhere;
 }
 
+/* 折り返した2行目以降が行番号の下へ回り込まないよう、行番号の幅だけぶら下げる */
 .markdown-body.latex-source .line {
   counter-increment: source-line;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 100%;
+  padding-left: 4.2em;
+  text-indent: -4.2em;
 }
 
 .markdown-body.latex-source .line::before {
@@ -802,6 +814,7 @@ body.resizing {
   display: inline-block;
   width: 3em;
   margin-right: 1.2em;
+  text-indent: 0;
   text-align: right;
   color: var(--fg-muted);
   user-select: none;
