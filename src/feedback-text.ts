@@ -1,12 +1,16 @@
-import type { FeedbackBundle } from "./shared/types.ts";
+import type { FeedbackBundle, LineRange } from "./shared/types.ts";
 
 export const FEEDBACK_GUIDANCE =
   "Human feedback received. Address each comment, then respond with reply_comment " +
-  "(use commentId; set resolve=true once handled) and publish updated revisions as needed.\n";
+  "(use commentId; set resolve=true once handled) and publish updated revisions as needed. " +
+  "`lines` is the 1-based line range in the markdown source of that `rev`.\n";
 
 const CLIP_NOTICE =
   "\n[kairan] This is a partial excerpt; the rest was left out for length. " +
   "Call list_feedback to retrieve the whole thing.\n";
+
+const formatLines = (lines: LineRange): string =>
+  lines.start === lines.end ? `${lines.start}` : `${lines.start}-${lines.end}`;
 
 export function describeBundle(bundle: FeedbackBundle) {
   return {
@@ -16,6 +20,7 @@ export function describeBundle(bundle: FeedbackBundle) {
         commentId: comment.id,
         file: comment.fileName,
         rev: comment.rev,
+        lines: comment.anchor?.lines == null ? null : formatLines(comment.anchor.lines),
         quote: comment.anchor?.exact ?? null,
         comment: comment.body,
       })),

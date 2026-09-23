@@ -47,6 +47,24 @@ function answeredAsk(index: number): FeedbackBundle["answeredAsks"][number] {
 }
 
 describe("describeBundle", () => {
+  test("行範囲は 1 行なら単独、複数行なら start-end、無ければ null で返す", () => {
+    const withLines = (lines: { start: number; end: number } | null) => {
+      const entry = reviewEntry(1, "直して");
+      const comment = entry.comments[0];
+      if (comment?.anchor == null) throw new Error("fixture must be anchored");
+      return { ...entry, comments: [{ ...comment, anchor: { ...comment.anchor, lines } }] };
+    };
+    const described = describeBundle({
+      reviews: [
+        withLines({ start: 12, end: 12 }),
+        withLines({ start: 3, end: 5 }),
+        withLines(null),
+      ],
+      answeredAsks: [],
+    });
+    expect(described.reviews.map((r) => r.comments[0]?.lines)).toEqual(["12", "3-5", null]);
+  });
+
   test("空の要約は null にし、回答は質問文と対で並べる", () => {
     const described = describeBundle({
       reviews: [
