@@ -1,4 +1,6 @@
-export type DocFormat = "markdown" | "html";
+export const DOC_FORMATS = ["markdown", "html", "latex"] as const;
+
+export type DocFormat = (typeof DOC_FORMATS)[number];
 
 export type SessionStatus = "active" | "archived";
 

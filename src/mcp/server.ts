@@ -5,7 +5,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import { loadConfig } from "../config.ts";
 import { describeBundle, FEEDBACK_GUIDANCE } from "../feedback-text.ts";
 import { claudeAgentSessionKey } from "../shared/session-id.ts";
-import type { AskQuestion, PublishResponse } from "../shared/types.ts";
+import { type AskQuestion, DOC_FORMATS, type PublishResponse } from "../shared/types.ts";
 import { daemonBaseUrl } from "../shared/url.ts";
 import { DaemonClient } from "./daemon-client.ts";
 import { resolvePublishSource } from "./input.ts";
@@ -70,7 +70,7 @@ const publishInputSchema = z.object({
   path: z
     .string()
     .optional()
-    .describe("Path to a markdown/html file to publish (relative to cwd or absolute)"),
+    .describe("Path to a markdown/html/LaTeX file to publish (relative to cwd or absolute)"),
   content: z.string().optional().describe("Document body to publish directly instead of a file"),
   name: z
     .string()
@@ -79,7 +79,7 @@ const publishInputSchema = z.object({
       "File ID within the session (URL segment). Defaults to the basename of path. Required with content. Re-publishing the same name creates a new revision",
     ),
   format: z
-    .enum(["markdown", "html"])
+    .enum(DOC_FORMATS)
     .optional()
     .describe("Defaults to inference from the file extension of name/path"),
   session: z
@@ -265,7 +265,8 @@ export async function runMcpServer(): Promise<void> {
     {
       title: "Publish a document to the browser",
       description:
-        "Publish a markdown or HTML document (file path or inline content) to the kairan browser viewer. " +
+        "Publish a markdown, HTML or LaTeX document (file path or inline content) to the kairan browser viewer. " +
+        "LaTeX is shown as highlighted source with line numbers (not typeset), so the human can comment on lines. " +
         "Publishing the same name again creates a new revision with a viewable diff. Returns the URL. " +
         "Pass `questions` to embed a decision form in the document; this does NOT block — the human's " +
         "answers are injected into your session by kairan's Stop hook, or picked up by your next " +

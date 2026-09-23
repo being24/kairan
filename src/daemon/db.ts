@@ -18,6 +18,7 @@ import type {
   Session,
   SessionKeyState,
 } from "../shared/types.ts";
+import { DOC_FORMATS } from "../shared/types.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -291,7 +292,7 @@ function toFileEntry(row: FileRow): FileEntry {
     id: row.id,
     sessionId: row.session_id,
     name: row.name,
-    format: row.format === "html" ? "html" : "markdown",
+    format: DOC_FORMATS.find((format) => format === row.format) ?? "markdown",
     title: row.title,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

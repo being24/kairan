@@ -10,6 +10,11 @@ describe("inferFormat", () => {
     expect(inferFormat("b.htm")).toBe("html");
   });
 
+  test(".tex は大文字小文字を問わず LaTeX として扱う", () => {
+    expect(inferFormat("申請書.tex")).toBe("latex");
+    expect(inferFormat("PAPER.TEX")).toBe("latex");
+  });
+
   test("returns null for unknown or missing extensions", () => {
     expect(inferFormat("a.txt")).toBeNull();
     expect(inferFormat("noext")).toBeNull();

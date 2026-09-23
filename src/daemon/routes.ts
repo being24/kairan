@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { KairanConfig } from "../config.ts";
 import { FAVICON_SVG } from "../shared/favicon.ts";
 import { isValidSessionId } from "../shared/session-id.ts";
-import type { AskQuestion, KairanEvent } from "../shared/types.ts";
+import { type AskQuestion, DOC_FORMATS, type KairanEvent } from "../shared/types.ts";
 import { daemonBaseUrl, localBaseUrls } from "../shared/url.ts";
 import type { Store } from "./db.ts";
 import type { Hub } from "./hub.ts";
@@ -109,7 +109,7 @@ const askQuestionSchema = z.object({
 const publishSchema = z.object({
   sessionId: z.string().min(1),
   name: fileNameSchema,
-  format: z.enum(["markdown", "html"]),
+  format: z.enum(DOC_FORMATS),
   content: z.string(),
   title: z.string().max(500).optional(),
   open: z.boolean().optional(),

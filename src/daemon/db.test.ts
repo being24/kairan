@@ -287,6 +287,13 @@ describe("publish and revisions", () => {
     expect(store.getComment(comment.id)?.anchor?.lines).toEqual({ start: 1, end: 2 });
   });
 
+  test("LaTeX 文書は形式を保ったまま読み戻せる", () => {
+    const { store } = makeStore();
+    const session = store.createSession();
+    store.publish(session.id, "paper.tex", "latex", "\\section{序論}\n");
+    expect(store.getFile(session.id, "paper.tex")?.format).toBe("latex");
+  });
+
   test("source_path 列を持たない既存 DB でも起動して publish できる", () => {
     const db = new Database(":memory:");
     db.exec(`

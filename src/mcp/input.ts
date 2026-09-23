@@ -5,6 +5,7 @@ export function inferFormat(fileName: string): DocFormat | null {
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
   if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
+  if (lower.endsWith(".tex")) return "latex";
   return null;
 }
 
@@ -34,7 +35,7 @@ export function resolvePublishSource(args: RawPublishArgs, cwd: string): Resolve
     const format = args.format ?? inferFormat(name);
     if (format == null) {
       throw new Error(
-        `cannot infer format from file name "${name}". Pass format: "markdown" or "html"`,
+        `cannot infer format from file name "${name}". Pass format: "markdown", "html" or "latex"`,
       );
     }
     return { kind: "path", path: absolutePath, name, format };
@@ -47,7 +48,7 @@ export function resolvePublishSource(args: RawPublishArgs, cwd: string): Resolve
     const format = args.format ?? inferFormat(args.name);
     if (format == null) {
       throw new Error(
-        `cannot infer format from file name "${args.name}". Pass format: "markdown" or "html"`,
+        `cannot infer format from file name "${args.name}". Pass format: "markdown", "html" or "latex"`,
       );
     }
     return { kind: "content", content: args.content, name: args.name, format };
