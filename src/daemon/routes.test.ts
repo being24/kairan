@@ -1347,16 +1347,16 @@ describe("reveal", () => {
     const { app, localOpens } = makeApp();
     const session = await createSession(app);
     const fileId = await publishWithSource(app, session.id, import.meta.path);
-    const res = await reveal(app, fileId, "finder");
+    const res = await reveal(app, fileId, "file-manager");
     expect(res.status).toBe(200);
-    expect(localOpens).toEqual([{ target: "finder", path: import.meta.path }]);
+    expect(localOpens).toEqual([{ target: "file-manager", path: import.meta.path }]);
   });
 
   test("tunnel 越し（非 loopback host）は 403 で、コマンドを起動しない", async () => {
     const { app, localOpens } = makeApp();
     const session = await createSession(app);
     const fileId = await publishWithSource(app, session.id, import.meta.path);
-    const res = await reveal(app, fileId, "finder", "kairan.trycloudflare.com");
+    const res = await reveal(app, fileId, "file-manager", "kairan.trycloudflare.com");
     expect(res.status).toBe(403);
     expect(localOpens).toEqual([]);
   });
@@ -1365,14 +1365,14 @@ describe("reveal", () => {
     const { app } = makeApp();
     const session = await createSession(app);
     const fileId = await publishWithSource(app, session.id, null);
-    expect((await reveal(app, fileId, "finder")).status).toBe(409);
+    expect((await reveal(app, fileId, "file-manager")).status).toBe(409);
   });
 
   test("publish 後に消えたファイルは 404", async () => {
     const { app } = makeApp();
     const session = await createSession(app);
     const fileId = await publishWithSource(app, session.id, "/tmp/kairan-does-not-exist-42.md");
-    expect((await reveal(app, fileId, "finder")).status).toBe(404);
+    expect((await reveal(app, fileId, "file-manager")).status).toBe(404);
   });
 
   test("未知の target は 400", async () => {

@@ -611,7 +611,7 @@ function isLocalView(): boolean {
   return LOOPBACK_HOSTNAMES.includes(location.hostname);
 }
 
-async function revealFile(fileId: number, target: "finder" | "editor"): Promise<void> {
+async function revealFile(fileId: number, target: "file-manager" | "editor"): Promise<void> {
   const res = await fetch(`/api/files/${fileId}/reveal`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -627,8 +627,8 @@ function buildFileActions(file: FileEntry): HTMLElement {
   const status = el("span", { class: "file-action-status", role: "status" });
 
   if (isLocalView() && file.hasLocalFile) {
-    const targets: Array<["finder" | "editor", string, string]> = [
-      ["finder", "Finder", "publish 元のファイルを Finder で表示"],
+    const targets: Array<["file-manager" | "editor", string, string]> = [
+      ["file-manager", "Finder", "publish 元のファイルを Finder で表示"],
       ["editor", "エディタ", "publish 元のファイルをエディタで開く"],
     ];
     for (const [target, label, hint] of targets) {

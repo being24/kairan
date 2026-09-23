@@ -619,7 +619,7 @@ export function createApp(deps: AppDeps): Hono {
     const file = store.getFileById(Number(c.req.param("id")));
     if (file == null) return c.json({ error: "unknown file" }, 404);
     const parsed = z
-      .object({ target: z.enum(["finder", "editor"]) })
+      .object({ target: z.enum(["file-manager", "editor"]) })
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
 
