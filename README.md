@@ -20,8 +20,9 @@ Claude Code / Codex などの agent が生成した markdown / HTML / LaTeX を�
 - **LaTeX（`.tex`）は組版せず、行番号つきのハイライトしたソースとして表示する**。論文・申請書の原稿に行単位でコメントし、agent へ行番号付きで返すための形式（PDF 化はしない。raw / ダウンロードはテキストのまま）
 - **publish された HTML は kairan と同一オリジンで動く**。実行中の文書にそのままインラインコメントを付けられるようにするための設計で、引き換えに文書のスクリプトは kairan の API（セッション・ファイルの削除、レビュー送信、ローカルファイルを開く操作）を叩ける。信頼できない HTML を publish しないこと（markdown 側は本体画面の `script-src 'self'` で inline handler を禁止している）
 - **タブの favicon がステータスを示す**。あなたの対応待ち（未回答の質問・agent がレビュー送信を待っている）があれば赤バッジ、タブを開いている間に届いた未読の publish があれば青バッジ。タブタイトルにも対応待ちの件数が出る
-- **表示中のファイルを「Finder で表示」「エディタで開く」「ダウンロード」できる**。Finder / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
+- **表示中のファイルを「Finder / エクスプローラーで表示」「エディタで開く」「ダウンロード」できる**。ファイルマネージャー / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
 - publish 時に macOS 通知センターへ通知（設定で off 可）。[terminal-notifier](https://github.com/julienXX/terminal-notifier) が入っていれば**通知クリックでそのファイルをブラウザで開ける**（`brew install terminal-notifier`。無ければ osascript 通知にフォールバック、クリック遷移なし）
+- **WSL でも動く**（デーモンは WSL、ブラウザ・エディタは Windows 側という構成）。ブラウザは Windows の既定ブラウザで開き、通知は Windows のトースト通知（クリックでそのファイルを開ける。追加インストール不要）、「エクスプローラーで表示」は対象ファイルを選択した状態で開き、「エディタで開く」は VS Code の `code` コマンドで WSL リモートとして開く。開いているタブの再利用は macOS のみ
 - **人間 → agent のフィードバック**にも対応。文書にインラインコメントを付けて GitHub PR レビューのように一括送信でき、agent からの選択肢つき質問は**その文書の末尾に埋め込まれたフォーム**として出る
   - **agent は待たない**。回答・レビューは Stop hook（`kairan hook stop`）がセッションへ注入する。hook を入れていない agent は次の kairan tool call か `list_feedback` で回収する
   - 質問は 1 文書に 1 セットだけ。同じ文書に publish し直すと前の未回答の質問は置き換わるので、**答えないまま溜まらない**
@@ -113,7 +114,7 @@ markdown / HTML / LaTeX をブラウザに表示する。`path`（ファイル�
 
 `questions` は**ブロックしない**。同じ内容で publish し直しても同じフォームが残り（回答途中の入力も消えない）、内容を変えると前の未回答の質問は取り下げられて新しいものに置き換わる。答えないまま何個も並ぶことはない。
 
-`path` で publish したファイルは元の絶対パスが記録され、ブラウザの「Finder で表示」「エディタで開く」から開ける（`content` で publish し直すと記録は消える）。パス自体は API の応答にも `list_files` にも出ない。
+`path` で publish したファイルは元の絶対パスが記録され、ブラウザの「Finder / エクスプローラーで表示」「エディタで開く」から開ける（`content` で publish し直すと記録は消える）。パス自体は API の応答にも `list_files` にも出ない。
 
 ### `list_files`
 
@@ -173,12 +174,13 @@ kairan hook stop # Claude Code の Stop hook 本体（settings.json から呼ば
 | `dataDir` | `KAIRAN_DATA_DIR` | `~/.kairan` | SQLite / lock の置き場所 |
 | `autoOpen` | `KAIRAN_AUTO_OPEN` | `session-first` | `session-first`（セッション初回のみ自動オープン）/ `always` / `never` |
 | `reopenWhenNoTab` | `KAIRAN_REOPEN_WHEN_NO_TAB` | `true` | publish 時にそのセッションを見ているタブが無ければ開き直す |
-| `notifications` | `KAIRAN_NOTIFICATIONS` | `true` | macOS 通知センターへの通知 |
+| `notifications` | `KAIRAN_NOTIFICATIONS` | `true` | publish の通知（macOS は通知センター、WSL は Windows のトースト通知） |
 | `notifyOn` | `KAIRAN_NOTIFY_ON` | `all` | `all`（上書きも通知）/ `new-file`（新規ファイルのみ） |
-| `openCommand` | `KAIRAN_OPEN_COMMAND` | `open` | ブラウザを開くコマンド |
-| `editorUrl` | `KAIRAN_EDITOR_URL` | `vscode://file{path}` | 「エディタで開く」の URL テンプレート。`{path}` が publish 元の絶対パスに置換される（Cursor なら `cursor://file{path}`）。空文字にするとボタンを出さない |
+| `openCommand` | `KAIRAN_OPEN_COMMAND` | `""`（自動） | ブラウザを開くコマンド。空なら環境に合わせる（macOS は `open`、WSL は Windows の既定ブラウザ、その他は `xdg-open`）。指定すると `<openCommand> <url>` を実行する |
+| `editorUrl` | `KAIRAN_EDITOR_URL` | `vscode://file{path}` | 「エディタで開く」の URL テンプレート。`{path}` が publish 元の絶対パスに置換される（Cursor なら `cursor://file{path}`）。`editorCommand` が空のときに使う。両方空にするとボタンを出さない |
+| `editorCommand` | `KAIRAN_EDITOR_COMMAND` | WSL は `code`、それ以外は `""` | 空でなければ「エディタで開く」は `editorUrl` ではなく `<editorCommand> <path>` を実行する（WSL の Cursor なら `cursor`）。WSL では Windows 版エディタの URL が WSL 側のファイルを開けないため、既定でコマンドを使う |
 | `followDefault` | `KAIRAN_FOLLOW_DEFAULT` | `true` | UI「新着に追従」トグルの初期値 |
-| `reuseTab` | `KAIRAN_REUSE_TAB` | `true` | 自動オープン・通知クリック時に既存の kairan タブを再利用する（Chrome 系 / Safari。初回に macOS の自動化許可が必要。`false` で常に新規タブ） |
+| `reuseTab` | `KAIRAN_REUSE_TAB` | `true` | 自動オープン・通知クリック時に既存の kairan タブを再利用する（macOS の Chrome 系 / Safari のみ。初回に macOS の自動化許可が必要。`false` で常に新規タブ。WSL では常に新規タブ） |
 | `shutdownGraceMs` | `KAIRAN_SHUTDOWN_GRACE_MS` | `5000` | 全接続 0 になってから自動停止するまでの猶予 |
 | `archiveGraceMs` | `KAIRAN_ARCHIVE_GRACE_MS` | `10000` | デーモン起動後、生きている agent が接続し直すのを待つ時間。これを過ぎても接続の無い active セッションは archive する |
 | `feedbackWaitMs` | `KAIRAN_FEEDBACK_WAIT_MS` | `240000`（4 分） | ブロックして待つ API（`/api/feedback/wait`）で待ち時間の指定が無かったときの既定。MCP tool call はハーネス側で 270 秒で切られるため、それより短くしてある |
