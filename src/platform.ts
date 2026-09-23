@@ -25,3 +25,15 @@ export function openUrlCommand(platform: HostPlatform, url: string): string[] {
       return ["xdg-open", url];
   }
 }
+
+/** ファイルを選択状態で表示するアプリの名前（UI の表記）。この環境で開けなければ null */
+export function fileManagerName(platform: HostPlatform): string | null {
+  switch (platform) {
+    case "macos":
+      return "Finder";
+    case "wsl":
+      return "エクスプローラー";
+    case "other":
+      return null;
+  }
+}

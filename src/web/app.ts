@@ -63,6 +63,7 @@ interface State {
   commentsOpen: boolean;
   homeDir: string | null;
   editorEnabled: boolean;
+  fileManagerName: string | null;
   /** このタブを開いている間に届いた、まだ表示していない publish（fileId → sessionId） */
   unreadFiles: Map<number, string>;
 }
@@ -88,6 +89,7 @@ const state: State = {
   commentsOpen: false,
   homeDir: null,
   editorEnabled: false,
+  fileManagerName: null,
   unreadFiles: new Map(),
 };
 
@@ -602,7 +604,7 @@ function renderFiles(): void {
   );
 }
 
-// --- 描画: ファイル操作（Finder / エディタ / ダウンロード）---------------------
+// --- 描画: ファイル操作（ファイルマネージャー / エディタ / ダウンロード）---------
 
 const LOOPBACK_HOSTNAMES = ["localhost", "127.0.0.1", "::1", "[::1]"];
 
@@ -627,12 +629,15 @@ function buildFileActions(file: FileEntry): HTMLElement {
   const status = el("span", { class: "file-action-status", role: "status" });
 
   if (isLocalView() && file.hasLocalFile) {
-    const targets: Array<["file-manager" | "editor", string, string]> = [
-      ["file-manager", "Finder", "publish 元のファイルを Finder で表示"],
-      ["editor", "エディタ", "publish 元のファイルをエディタで開く"],
-    ];
+    const targets: Array<["file-manager" | "editor", string, string]> = [];
+    if (state.fileManagerName != null) {
+      const name = state.fileManagerName;
+      targets.push(["file-manager", name, `publish 元のファイルを ${name} で表示`]);
+    }
+    if (state.editorEnabled) {
+      targets.push(["editor", "エディタ", "publish 元のファイルをエディタで開く"]);
+    }
     for (const [target, label, hint] of targets) {
-      if (target === "editor" && !state.editorEnabled) continue;
       const button = el("button", { class: "seg", type: "button", title: hint }, label);
       button.addEventListener("click", () => {
         status.textContent = "";
@@ -2103,9 +2108,11 @@ async function main(): Promise<void> {
       followDefault: boolean;
       homeDir: string | null;
       editorEnabled: boolean;
+      fileManagerName: string | null;
     }>("/api/config");
     state.homeDir = config.homeDir ?? null;
     state.editorEnabled = config.editorEnabled;
+    state.fileManagerName = config.fileManagerName;
     if (stored == null) state.follow = config.followDefault;
   } catch {
     // follow はデフォルト true のまま、パスは短縮なしで表示される

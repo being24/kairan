@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import packageJson from "../../package.json" with { type: "json" };
 import { loadConfig } from "../config.ts";
+import { detectHostPlatform, fileManagerName } from "../platform.ts";
 import { daemonBaseUrl } from "../shared/url.ts";
 import { buildClientAssets } from "./bundle.ts";
 import { Store } from "./db.ts";
@@ -57,6 +58,7 @@ export async function runDaemon(): Promise<void> {
     version: packageJson.version,
     renderMarkdown,
     renderLatexSource,
+    fileManagerName: fileManagerName(detectHostPlatform()),
     notify: createNotifier(config),
     openInBrowser: createOpener(config),
     openLocalFile: createLocalFileOpener(config),

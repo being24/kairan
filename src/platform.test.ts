@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectHostPlatform, openUrlCommand } from "./platform.ts";
+import { detectHostPlatform, fileManagerName, openUrlCommand } from "./platform.ts";
 
 describe("detectHostPlatform", () => {
   test("darwin は macOS", () => {
@@ -31,5 +31,13 @@ describe("openUrlCommand", () => {
   test("macOS は open、それ以外は xdg-open", () => {
     expect(openUrlCommand("macos", url)).toEqual(["open", url]);
     expect(openUrlCommand("other", url)).toEqual(["xdg-open", url]);
+  });
+});
+
+describe("fileManagerName", () => {
+  test("ファイルを表示するアプリの名前。開けない環境では null", () => {
+    expect(fileManagerName("macos")).toBe("Finder");
+    expect(fileManagerName("wsl")).toBe("エクスプローラー");
+    expect(fileManagerName("other")).toBeNull();
   });
 });

@@ -34,7 +34,10 @@ function testConfig(overrides: Partial<KairanConfig> = {}): KairanConfig {
   };
 }
 
-function makeApp(configOverrides: Partial<KairanConfig> = {}) {
+function makeApp(
+  configOverrides: Partial<KairanConfig> = {},
+  { fileManagerName = "Finder" as string | null } = {},
+) {
   const store = Store.openInMemory();
   const hub = new Hub();
   const signals = new SignalHub();
@@ -51,6 +54,7 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
     version: "0.0.0-test",
     renderMarkdown: (src) => `<rendered>${src}</rendered>`,
     renderLatexSource: (src) => `<latex-source>${src}</latex-source>`,
+    fileManagerName,
     notify: (title, body, url) => notified.push({ title, body, url }),
     openInBrowser: (url) => opened.push(url),
     openLocalFile: async (target, path) => {
@@ -321,6 +325,22 @@ describe("session creation", () => {
     expect(created.cwd).toBe("/Users/me/workspace/proj");
     const listed = (await (await app.request("/api/sessions")).json()) as Session[];
     expect(listed[0]?.cwd).toBe("/Users/me/workspace/proj");
+  });
+
+  test("config はファイルマネージャーの名前とエディタの可否を返す", async () => {
+    type Config = { fileManagerName: string | null; editorEnabled: boolean };
+    const read = async (app: ReturnType<typeof makeApp>["app"]) =>
+      (await (await app.request("/api/config")).json()) as Config;
+    const wsl = makeApp(
+      { editorUrl: "", editorCommand: "code" },
+      { fileManagerName: "エクスプローラー" },
+    );
+    expect(await read(wsl.app)).toMatchObject({
+      fileManagerName: "エクスプローラー",
+      editorEnabled: true,
+    });
+    const none = makeApp({ editorUrl: "", editorCommand: "" }, { fileManagerName: null });
+    expect(await read(none.app)).toMatchObject({ fileManagerName: null, editorEnabled: false });
   });
 
   test("config exposes homeDir for path shortening", async () => {

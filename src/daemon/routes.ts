@@ -28,6 +28,8 @@ export interface AppDeps {
   version: string;
   renderMarkdown: (src: string) => string;
   renderLatexSource: (src: string) => string;
+  /** 「ファイルマネージャーで表示」のボタン名。null ならボタンを出さない */
+  fileManagerName: string | null;
   notify: (title: string, body: string, url?: string) => void;
   openInBrowser: (url: string) => void;
   openLocalFile: LocalFileOpener;
@@ -360,7 +362,8 @@ export function createApp(deps: AppDeps): Hono {
     c.json({
       followDefault: config.followDefault,
       homeDir: homedir(),
-      editorEnabled: config.editorUrl !== "",
+      editorEnabled: config.editorCommand !== "" || config.editorUrl !== "",
+      fileManagerName: deps.fileManagerName,
     }),
   );
 
