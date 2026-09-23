@@ -57,9 +57,12 @@ function linePositionOf(node: Text): LinePosition | null {
   const block = node.parentElement?.closest(`[${SOURCE_LINES_ATTR}]`);
   const lines = block?.getAttribute(SOURCE_LINES_ATTR);
   if (block == null || lines == null) return null;
-  const codeLine = node.parentElement?.closest(`pre[${SOURCE_LINES_ATTR}] .line`);
-  if (codeLine == null || !block.contains(codeLine)) return { lines, codeLineIndex: null };
-  return { lines, codeLineIndex: [...block.querySelectorAll(".line")].indexOf(codeLine) };
+  const codeLines = block.tagName === "PRE" ? [...block.querySelectorAll(".line")] : [];
+  if (codeLines.length === 0) return { lines, codeLineIndex: null };
+  // shiki は行と行の間に改行だけのテキストを置く。これを端に数えるとコードブロック全体に広がる
+  const codeLine = node.parentElement?.closest(".line");
+  if (codeLine == null || !block.contains(codeLine)) return null;
+  return { lines, codeLineIndex: codeLines.indexOf(codeLine) };
 }
 
 /**
