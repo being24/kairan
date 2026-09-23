@@ -1,4 +1,5 @@
 import type { KairanConfig } from "../config.ts";
+import { detectHostPlatform, type HostPlatform } from "../platform.ts";
 import { daemonBaseUrl } from "../shared/url.ts";
 
 export type Notifier = (title: string, body: string, url?: string) => void;
@@ -8,6 +9,7 @@ function shellQuote(value: string): string {
 }
 
 interface NotifierDeps {
+  platform?: HostPlatform;
   which?: (command: string) => string | null;
   spawn?: (args: string[]) => void;
 }
@@ -20,6 +22,41 @@ function defaultSpawn(args: string[]): void {
   });
 }
 
+/** PowerShell の単一引用符リテラル。中身は一切展開されず、' だけを二重にすればよい */
+function powershellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+// PowerShell 自身の AppUserModelID。kairan 用の ID を登録しなくてもトーストを出せる
+const POWERSHELL_APP_ID =
+  "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
+
+/**
+ * Windows のトースト通知を出す PowerShell スクリプト。url を渡すと、クリックで
+ * 既定のアプリ（ブラウザ）がその URL を開く
+ */
+export function windowsToastScript(title: string, body: string, url?: string): string {
+  const xmlEscape = "[Security.SecurityElement]::Escape";
+  const activation =
+    url == null ? "" : ` activationType=\`"protocol\`" launch=\`"$(${xmlEscape}($url))\`"`;
+  return [
+    "$ProgressPreference = 'SilentlyContinue'",
+    `$title = ${powershellLiteral(title)}`,
+    `$body = ${powershellLiteral(body)}`,
+    ...(url == null ? [] : [`$url = ${powershellLiteral(url)}`]),
+    "$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]",
+    "$null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]",
+    `$xml = "<toast${activation}><visual><binding template=\`"ToastGeneric\`"><text>$(${xmlEscape}($title))</text><text>$(${xmlEscape}($body))</text></binding></visual></toast>"`,
+    "$doc = New-Object Windows.Data.Xml.Dom.XmlDocument",
+    "$doc.LoadXml($xml)",
+    `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(${powershellLiteral(POWERSHELL_APP_ID)}).Show([Windows.UI.Notifications.ToastNotification]::new($doc))`,
+  ].join("\n");
+}
+
+function encodePowershellCommand(script: string): string {
+  return Buffer.from(script, "utf16le").toString("base64");
+}
+
 /**
  * macOS 通知センターへの通知。terminal-notifier があればクリックで URL を
  * 開ける通知にし、無ければ osascript（クリック遷移なし）にフォールバックする。
@@ -27,8 +64,26 @@ function defaultSpawn(args: string[]): void {
  */
 export function createNotifier(config: KairanConfig, deps: NotifierDeps = {}): Notifier {
   if (!config.notifications) return () => {};
+  const platform = deps.platform ?? detectHostPlatform();
   const which = deps.which ?? Bun.which;
   const spawn = deps.spawn ?? defaultSpawn;
+
+  if (platform === "wsl") {
+    return (title, body, url) => {
+      try {
+        spawn([
+          "powershell.exe",
+          "-NoProfile",
+          "-NonInteractive",
+          "-EncodedCommand",
+          encodePowershellCommand(windowsToastScript(title, body, url)),
+        ]);
+      } catch {
+        // no-op
+      }
+    };
+  }
+  if (platform !== "macos") return () => {};
 
   const terminalNotifier = which("terminal-notifier");
   if (terminalNotifier != null) {
