@@ -1,11 +1,23 @@
 import type { KairanConfig } from "../config.ts";
+import { detectHostPlatform, type HostPlatform, openUrlCommand } from "../platform.ts";
 import { localBaseUrls } from "../shared/url.ts";
 
 export type Opener = (url: string) => void;
 
 interface OpenerDeps {
+  platform?: HostPlatform;
   runJxa?: (script: string, args: string[]) => Promise<string>;
   plainOpen?: (url: string) => void;
+  spawn?: (command: string[]) => void;
+}
+
+function defaultSpawn(command: string[]): void {
+  Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+}
+
+/** ブラウザを開くコマンド。openCommand が空なら実行環境の既定のやり方で開く */
+function browserCommand(config: KairanConfig, platform: HostPlatform, url: string): string[] {
+  return config.openCommand === "" ? openUrlCommand(platform, url) : [config.openCommand, url];
 }
 
 // 既に開いている kairan タブを探して URL 差し替え + 前面化する。
@@ -78,21 +90,20 @@ async function defaultRunJxa(script: string, args: string[]): Promise<string> {
  * 場合のみ新規に開く。
  */
 export function createOpener(config: KairanConfig, deps: OpenerDeps = {}): Opener {
+  const platform = deps.platform ?? detectHostPlatform();
+  const spawn = deps.spawn ?? defaultSpawn;
   const plainOpen =
     deps.plainOpen ??
     ((url: string) => {
       try {
-        Bun.spawn([config.openCommand, url], {
-          stdin: "ignore",
-          stdout: "ignore",
-          stderr: "ignore",
-        });
+        spawn(browserCommand(config, platform, url));
       } catch {
         // ブラウザを開けなくても publish 自体は成功させる
       }
     });
 
-  if (!config.reuseTab) return plainOpen;
+  // タブ再利用は macOS の JXA でしか実現できない。他の環境で試しても osascript が無く失敗するだけ
+  if (!config.reuseTab || platform !== "macos") return plainOpen;
 
   const runJxa = deps.runJxa ?? defaultRunJxa;
   const bases = localBaseUrls(config.port);

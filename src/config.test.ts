@@ -5,7 +5,12 @@ const HOME = "/home/testuser";
 
 describe("loadConfig", () => {
   test("returns defaults when no file and no env", () => {
-    const config = loadConfig({ env: {}, home: HOME, readConfigFile: () => null });
+    const config = loadConfig({
+      env: {},
+      home: HOME,
+      readConfigFile: () => null,
+      platform: "macos",
+    });
     expect(config).toEqual({
       port: 5766,
       host: "127.0.0.1",
@@ -14,8 +19,9 @@ describe("loadConfig", () => {
       reopenWhenNoTab: true,
       notifications: true,
       notifyOn: "all",
-      openCommand: "open",
+      openCommand: "",
       editorUrl: "vscode://file{path}",
+      editorCommand: "",
       followDefault: true,
       shutdownGraceMs: 5000,
       archiveGraceMs: 10_000,
@@ -23,6 +29,36 @@ describe("loadConfig", () => {
       feedbackWaitMs: 240_000,
       hookWaitMs: 3_600_000,
     });
+  });
+
+  test("WSL ではエディタを VS Code の WSL ランチャーで開く", () => {
+    const config = loadConfig({
+      env: {},
+      home: HOME,
+      readConfigFile: () => null,
+      platform: "wsl",
+    });
+    expect(config.editorCommand).toBe("code");
+    expect(config.openCommand).toBe("");
+  });
+
+  test("ブラウザ・エディタのコマンドは明示すればその値を使い、空文字は自動の意味で受け付ける", () => {
+    const config = loadConfig({
+      env: { KAIRAN_OPEN_COMMAND: "firefox", KAIRAN_EDITOR_COMMAND: "cursor" },
+      home: HOME,
+      readConfigFile: () => JSON.stringify({ openCommand: "" }),
+      platform: "wsl",
+    });
+    expect(config.openCommand).toBe("firefox");
+    expect(config.editorCommand).toBe("cursor");
+    const fromFile = loadConfig({
+      env: {},
+      home: HOME,
+      readConfigFile: () => JSON.stringify({ openCommand: "", editorCommand: "" }),
+      platform: "wsl",
+    });
+    expect(fromFile.openCommand).toBe("");
+    expect(fromFile.editorCommand).toBe("");
   });
 
   test("待ち時間は環境変数で伸ばせる", () => {

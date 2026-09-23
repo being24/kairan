@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { detectHostPlatform, type HostPlatform } from "./platform.ts";
 import { DEFAULT_PORT } from "./shared/consts.ts";
 
 // 認証なし・HTML無制限実行のデーモンを LAN に公開させないため loopback に限定する
@@ -16,12 +17,15 @@ const configSchema = z
     reopenWhenNoTab: z.boolean(),
     notifications: z.boolean(),
     notifyOn: z.enum(["all", "new-file"]),
-    openCommand: z.string().min(1),
+    // 空文字 = 環境に合わせて自動（platform.ts の openUrlCommand）
+    openCommand: z.string(),
     // 空文字 = エディタで開く機能を使わない。それ以外は置換先が無いと
     // 「エディタは起動するがファイルは開かない」無言の失敗になるため入口で弾く
     editorUrl: z.string().refine((url) => url === "" || url.includes("{path}"), {
       message: 'editorUrl must be empty or contain the "{path}" placeholder',
     }),
+    // 空でなければ「エディタで開く」は editorUrl ではなく `<editorCommand> <path>` を実行する
+    editorCommand: z.string(),
     followDefault: z.boolean(),
     shutdownGraceMs: z.number().int().min(0),
     archiveGraceMs: z.number().int().min(0),
@@ -37,6 +41,7 @@ interface LoadConfigOptions {
   env?: Record<string, string | undefined>;
   home?: string;
   readConfigFile?: (path: string) => string | null;
+  platform?: HostPlatform;
 }
 
 function defaultReadConfigFile(path: string): string | null {
@@ -85,6 +90,7 @@ function fromEnv(env: Record<string, string | undefined>): z.infer<typeof config
     ["KAIRAN_NOTIFY_ON", "notifyOn", "string"],
     ["KAIRAN_OPEN_COMMAND", "openCommand", "string"],
     ["KAIRAN_EDITOR_URL", "editorUrl", "string"],
+    ["KAIRAN_EDITOR_COMMAND", "editorCommand", "string"],
     ["KAIRAN_FOLLOW_DEFAULT", "followDefault", "bool"],
     ["KAIRAN_SHUTDOWN_GRACE_MS", "shutdownGraceMs", "int"],
     ["KAIRAN_ARCHIVE_GRACE_MS", "archiveGraceMs", "int"],
@@ -117,6 +123,7 @@ export function loadConfig(options: LoadConfigOptions = {}): KairanConfig {
   const env = options.env ?? process.env;
   const home = options.home ?? homedir();
   const readConfigFile = options.readConfigFile ?? defaultReadConfigFile;
+  const platform = options.platform ?? detectHostPlatform(env);
 
   const defaults: KairanConfig = {
     port: DEFAULT_PORT,
@@ -126,8 +133,10 @@ export function loadConfig(options: LoadConfigOptions = {}): KairanConfig {
     reopenWhenNoTab: true,
     notifications: true,
     notifyOn: "all",
-    openCommand: "open",
+    openCommand: "",
     editorUrl: "vscode://file{path}",
+    // WSL の Windows 版 VS Code は vscode:// URL だと WSL 側のファイルを開けない
+    editorCommand: platform === "wsl" ? "code" : "",
     followDefault: true,
     shutdownGraceMs: 5000,
     // デーモン再起動後、生きている agent が attach を張り直すのを待つ時間。
