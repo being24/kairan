@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS comments (
   quote TEXT,
   prefix TEXT,
   suffix TEXT,
+  line_start INTEGER,
+  line_end INTEGER,
   body TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'draft',
   review_id INTEGER REFERENCES reviews(id),
@@ -142,6 +144,8 @@ interface CommentRow {
   quote: string | null;
   prefix: string | null;
   suffix: string | null;
+  line_start: number | null;
+  line_end: number | null;
   body: string;
   state: string;
   review_id: number | null;
@@ -184,7 +188,15 @@ interface AskRow {
 
 function toAnchor(row: CommentRow): CommentAnchor | null {
   if (row.quote == null) return null;
-  return { exact: row.quote, prefix: row.prefix ?? "", suffix: row.suffix ?? "" };
+  return {
+    exact: row.quote,
+    prefix: row.prefix ?? "",
+    suffix: row.suffix ?? "",
+    lines:
+      row.line_start != null && row.line_end != null
+        ? { start: row.line_start, end: row.line_end }
+        : null,
+  };
 }
 
 function toReply(row: ReplyRow): CommentReply {
@@ -335,6 +347,10 @@ export class Store {
     );
     if (!columnsOf("files").includes("source_path")) {
       this.db.exec("ALTER TABLE files ADD COLUMN source_path TEXT");
+    }
+    if (!columnsOf("comments").includes("line_start")) {
+      this.db.exec("ALTER TABLE comments ADD COLUMN line_start INTEGER");
+      this.db.exec("ALTER TABLE comments ADD COLUMN line_end INTEGER");
     }
     this.enforceOneOpenAskPerFile();
   }
@@ -800,9 +816,19 @@ export class Store {
     const row = this.db
       .query<
         CommentRow,
-        [number, number, string | null, string | null, string | null, string, number]
+        [
+          number,
+          number,
+          string | null,
+          string | null,
+          string | null,
+          number | null,
+          number | null,
+          string,
+          number,
+        ]
       >(
-        "INSERT INTO comments (file_id, rev, quote, prefix, suffix, body, state, created_at) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?) RETURNING *",
+        "INSERT INTO comments (file_id, rev, quote, prefix, suffix, line_start, line_end, body, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?) RETURNING *",
       )
       .get(
         fileId,
@@ -810,6 +836,8 @@ export class Store {
         anchor?.exact ?? null,
         anchor?.prefix ?? null,
         anchor?.suffix ?? null,
+        anchor?.lines?.start ?? null,
+        anchor?.lines?.end ?? null,
         body,
         this.now(),
       );

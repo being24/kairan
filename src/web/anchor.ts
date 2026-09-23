@@ -1,4 +1,5 @@
-import type { CommentAnchor } from "../shared/types.ts";
+import { SOURCE_LINES_ATTR } from "../shared/consts.ts";
+import type { CommentAnchor, LineRange } from "../shared/types.ts";
 
 /** 引用に添える前後文脈の長さ */
 const CONTEXT_LENGTH = 30;
@@ -22,6 +23,67 @@ export function computeAnchor(root: Node, range: Range): CommentAnchor {
     prefix: before.toString().slice(-CONTEXT_LENGTH),
     suffix: after.toString().slice(0, CONTEXT_LENGTH),
   };
+}
+
+/** 選択の端がある位置。lines は最も内側のブロックの属性値、codeLineIndex はコードブロック内の何行目か */
+export interface LinePosition {
+  lines: string;
+  codeLineIndex: number | null;
+}
+
+function parseLines(value: string): LineRange | null {
+  const match = /^(\d+)-(\d+)$/.exec(value);
+  if (match == null) return null;
+  return { start: Number(match[1]), end: Number(match[2]) };
+}
+
+/** 選択の最初と最後の位置から、ソースの行範囲を求める */
+export function lineRangeOf(
+  first: LinePosition | null,
+  last: LinePosition | null,
+): LineRange | null {
+  if (first == null || last == null) return null;
+  const firstBlock = parseLines(first.lines);
+  const lastBlock = parseLines(last.lines);
+  if (firstBlock == null || lastBlock == null) return null;
+  // コードブロックの1行目は開き fence なので、コードの行は次の行から始まる
+  const start =
+    first.codeLineIndex == null ? firstBlock.start : firstBlock.start + 1 + first.codeLineIndex;
+  const end = last.codeLineIndex == null ? lastBlock.end : lastBlock.start + 1 + last.codeLineIndex;
+  return { start, end };
+}
+
+function linePositionOf(node: Text): LinePosition | null {
+  const block = node.parentElement?.closest(`[${SOURCE_LINES_ATTR}]`);
+  const lines = block?.getAttribute(SOURCE_LINES_ATTR);
+  if (block == null || lines == null) return null;
+  const codeLine = node.parentElement?.closest(`pre[${SOURCE_LINES_ATTR}] .line`);
+  if (codeLine == null || !block.contains(codeLine)) return { lines, codeLineIndex: null };
+  return { lines, codeLineIndex: [...block.querySelectorAll(".line")].indexOf(codeLine) };
+}
+
+/**
+ * markdown の描画表示での選択範囲を、ソースの行範囲へ落とす。
+ * 端は「実際に1文字以上選ばれたテキストノード」で取る。Range の終端は排他的で、
+ * 次のブロックの先頭（offset 0）を指すことがあり、そこを含めると1ブロック広がるため
+ */
+export function markdownLineRange(root: Element, range: Range): LineRange | null {
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let first: LinePosition | null = null;
+  let last: LinePosition | null = null;
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    if (!range.intersectsNode(node)) continue;
+    const from = node === range.startContainer ? range.startOffset : 0;
+    const to = node === range.endContainer ? range.endOffset : node.data.length;
+    if (to <= from) continue;
+    // ブロック間の改行（</p>\n<p> の \n）は行を持たない。選択の端に来ても行範囲には数えない
+    const position = linePositionOf(node);
+    if (position == null) continue;
+    first ??= position;
+    last = position;
+  }
+  return lineRangeOf(first, last);
 }
 
 function commonSuffixLength(a: string, b: string): number {

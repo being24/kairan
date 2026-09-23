@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveQuoteOffsets } from "./anchor.ts";
+import { lineRangeOf, resolveQuoteOffsets } from "./anchor.ts";
 
 const anchorOf = (exact: string, prefix = "", suffix = "") => ({ exact, prefix, suffix });
 
@@ -43,5 +43,36 @@ describe("resolveQuoteOffsets", () => {
 
   test("空の引用は解決しない", () => {
     expect(resolveQuoteOffsets("本文", anchorOf(""))).toBeNull();
+  });
+});
+
+describe("lineRangeOf", () => {
+  const block = (lines: string, codeLineIndex: number | null = null) => ({ lines, codeLineIndex });
+
+  test("同じブロック内の選択はそのブロックの行範囲", () => {
+    expect(lineRangeOf(block("3-4"), block("3-4"))).toEqual({ start: 3, end: 4 });
+  });
+
+  test("ブロックを跨ぐ選択は最初のブロックの開始行から最後のブロックの終了行まで", () => {
+    expect(lineRangeOf(block("1-1"), block("5-7"))).toEqual({ start: 1, end: 7 });
+  });
+
+  test("コードブロック内は開き fence の次の行から数えた1行に絞る", () => {
+    expect(lineRangeOf(block("10-14", 0), block("10-14", 0))).toEqual({ start: 11, end: 11 });
+    expect(lineRangeOf(block("10-14", 1), block("10-14", 2))).toEqual({ start: 12, end: 13 });
+  });
+
+  test("段落からコードブロックの途中までの選択", () => {
+    expect(lineRangeOf(block("8-8"), block("10-14", 1))).toEqual({ start: 8, end: 12 });
+  });
+
+  test("どちらかの端がソース行を持たない要素なら null", () => {
+    expect(lineRangeOf(null, block("1-1"))).toBeNull();
+    expect(lineRangeOf(block("1-1"), null)).toBeNull();
+  });
+
+  test("属性値が壊れていれば null", () => {
+    expect(lineRangeOf(block(""), block("1-1"))).toBeNull();
+    expect(lineRangeOf(block("abc"), block("1-1"))).toBeNull();
   });
 });

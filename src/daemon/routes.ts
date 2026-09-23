@@ -155,6 +155,10 @@ const anchorSchema = z.object({
   exact: z.string().min(1).max(5000),
   prefix: z.string().max(500),
   suffix: z.string().max(500),
+  lines: z
+    .object({ start: z.number().int().positive(), end: z.number().int().positive() })
+    .refine((lines) => lines.start <= lines.end)
+    .nullish(),
 });
 
 const commentCreateSchema = z.object({

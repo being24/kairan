@@ -13,6 +13,7 @@ import {
   collectTextSlices,
   computeAnchor,
   MAX_QUOTE_LENGTH,
+  markdownLineRange,
   resolveQuoteOffsets,
   unwrapMarks,
   wrapSlices,
@@ -1386,6 +1387,8 @@ function handleSelectionEnd(scope: DocScope | null): void {
   if (range.toString().trim() === "") return;
 
   const anchor = computeAnchor(scope.root, range);
+  // HTML 文書は agent の HTML がそのまま DOM になるため、同名の属性があっても markdown の行ではない
+  if (scope.frame == null) anchor.lines = markdownLineRange(scope.root, range);
   const rect = toViewRect(range.getBoundingClientRect(), scope);
   if (anchor.exact.length > MAX_QUOTE_LENGTH) {
     // このまま送っても API に弾かれ、入力したコメントが消えるだけなのでここで断る

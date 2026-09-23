@@ -61,11 +61,19 @@ export interface PublishResponse {
   askId: number | null;
 }
 
+/** markdown ソースの行範囲（1-based, 両端含む） */
+export interface LineRange {
+  start: number;
+  end: number;
+}
+
 /** 選択テキストの引用アンカー。null 相当（アンカーなし）はファイル全体コメント */
 export interface CommentAnchor {
   exact: string;
   prefix: string;
   suffix: string;
+  /** markdown の描画表示で選んだときだけ持つ。HTML 文書・旧コメントには無い */
+  lines?: LineRange | null;
 }
 
 export type CommentState = "draft" | "open" | "resolved";

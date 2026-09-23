@@ -265,6 +265,28 @@ describe("publish and revisions", () => {
     expect(store.getFileSourcePath(withoutPath.file.id)).toBeNull();
   });
 
+  test("行範囲の列を持たない既存の comments テーブルでも、行範囲つきコメントを保存できる", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL, rev INTEGER NOT NULL,
+        quote TEXT, prefix TEXT, suffix TEXT, body TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'draft', review_id INTEGER,
+        created_at INTEGER NOT NULL, submitted_at INTEGER, resolved_at INTEGER
+      );
+    `);
+    const store = new Store(db);
+    const { file } = seedFile(store);
+    const comment = store.createDraftComment(
+      file.id,
+      1,
+      { ...anchor, lines: { start: 1, end: 2 } },
+      "x",
+    );
+    expect(store.getComment(comment.id)?.anchor?.lines).toEqual({ start: 1, end: 2 });
+  });
+
   test("source_path 列を持たない既存 DB でも起動して publish できる", () => {
     const db = new Database(":memory:");
     db.exec(`
@@ -380,6 +402,20 @@ describe("comments", () => {
 
     store.deleteDraftComment(whole.id);
     expect(store.listFileComments(file.id)).toHaveLength(1);
+  });
+
+  test("選択範囲のソース行範囲を保存して読み戻せる（無いコメントは lines を持たない）", () => {
+    const { store } = makeStore();
+    const { file } = seedFile(store);
+    const withLines = store.createDraftComment(
+      file.id,
+      1,
+      { ...anchor, lines: { start: 2, end: 2 } },
+      "x",
+    );
+    const withoutLines = store.createDraftComment(file.id, 1, anchor, "y");
+    expect(store.getComment(withLines.id)?.anchor?.lines).toEqual({ start: 2, end: 2 });
+    expect(store.getComment(withoutLines.id)?.anchor?.lines).toBeNull();
   });
 
   test("update/delete reject non-draft comments", () => {

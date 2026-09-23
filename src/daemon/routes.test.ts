@@ -648,6 +648,40 @@ describe("comment api", () => {
     ).toHaveLength(0);
   });
 
+  test("行範囲は省略・null を受け付け、保存した値は一覧に載る", async () => {
+    const { app } = makeApp();
+    const { fileId } = await seedSessionFile(app);
+    const post = (lines: unknown) =>
+      postJson(app, `/api/files/${fileId}/comments`, {
+        rev: 1,
+        anchor: lines === undefined ? testAnchor : { ...testAnchor, lines },
+        body: "x",
+      });
+    expect((await post(undefined)).status).toBe(200);
+    expect((await post(null)).status).toBe(200);
+    expect((await post({ start: 2, end: 2 })).status).toBe(200);
+    const listed = (await (
+      await app.request(`/api/files/${fileId}/comments`)
+    ).json()) as FileComment[];
+    expect(listed.map((c) => c.anchor?.lines ?? null)).toEqual([null, null, { start: 2, end: 2 }]);
+  });
+
+  test("開始行が終了行より後ろ、または 0 以下の行範囲は拒否する", async () => {
+    const { app } = makeApp();
+    const { fileId } = await seedSessionFile(app);
+    for (const lines of [
+      { start: 2, end: 1 },
+      { start: 0, end: 1 },
+    ]) {
+      const res = await postJson(app, `/api/files/${fileId}/comments`, {
+        rev: 1,
+        anchor: { ...testAnchor, lines },
+        body: "x",
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
   test("comment on unknown revision is rejected", async () => {
     const { app } = makeApp();
     const { fileId } = await seedSessionFile(app);
