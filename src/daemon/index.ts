@@ -9,7 +9,7 @@ import { Hub } from "./hub.ts";
 import { createLocalFileOpener } from "./local-file.ts";
 import { createNotifier } from "./notify.ts";
 import { createOpener } from "./open.ts";
-import { createMarkdownRenderer } from "./render.ts";
+import { createLatexSourceRenderer, createMarkdownRenderer } from "./render.ts";
 import { createApp } from "./routes.ts";
 import { SignalHub } from "./waiters.ts";
 
@@ -20,6 +20,7 @@ export async function runDaemon(): Promise<void> {
   const store = Store.open(join(config.dataDir, "kairan.db"));
   const hub = new Hub();
   const renderMarkdown = await createMarkdownRenderer();
+  const renderLatexSource = await createLatexSourceRenderer();
   const clientAssets = await buildClientAssets();
 
   let stopping = false;
@@ -55,6 +56,7 @@ export async function runDaemon(): Promise<void> {
     config,
     version: packageJson.version,
     renderMarkdown,
+    renderLatexSource,
     notify: createNotifier(config),
     openInBrowser: createOpener(config),
     openLocalFile: createLocalFileOpener(config),

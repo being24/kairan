@@ -8,7 +8,12 @@ import { z } from "zod";
 import type { KairanConfig } from "../config.ts";
 import { FAVICON_SVG } from "../shared/favicon.ts";
 import { isValidSessionId } from "../shared/session-id.ts";
-import { type AskQuestion, DOC_FORMATS, type KairanEvent } from "../shared/types.ts";
+import {
+  type AskQuestion,
+  DOC_FORMATS,
+  type DocFormat,
+  type KairanEvent,
+} from "../shared/types.ts";
 import { daemonBaseUrl, localBaseUrls } from "../shared/url.ts";
 import type { Store } from "./db.ts";
 import type { Hub } from "./hub.ts";
@@ -22,6 +27,7 @@ export interface AppDeps {
   config: KairanConfig;
   version: string;
   renderMarkdown: (src: string) => string;
+  renderLatexSource: (src: string) => string;
   notify: (title: string, body: string, url?: string) => void;
   openInBrowser: (url: string) => void;
   openLocalFile: LocalFileOpener;
@@ -239,6 +245,12 @@ const REVALIDATE_CACHE = "no-cache";
 // reveal）を叩けるし、本体画面にも触れる。ローカル利用で利便性を優先する判断として許容している。
 // top-navigation は「クリック時のみ」に限る（by-user-activation なし＝文書側の script が
 // 勝手にタブごと遷移させられる）
+const DOWNLOAD_CONTENT_TYPES: Record<DocFormat, string> = {
+  markdown: "text/markdown; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  latex: "text/x-tex; charset=utf-8",
+};
+
 const RAW_SANDBOX_HEADERS = {
   "content-security-policy":
     "sandbox allow-scripts allow-same-origin allow-popups allow-modals allow-forms " +
@@ -282,7 +294,7 @@ function appShell(assetVersion: string): string {
 }
 
 export function createApp(deps: AppDeps): Hono {
-  const { store, hub, signals, config, renderMarkdown } = deps;
+  const { store, hub, signals, config, renderMarkdown, renderLatexSource } = deps;
   const app = new Hono({ strict: false });
   // 「このセッションは一度自動オープン済みか」はデーモンの生存期間だけ持てばよい
   // （再起動後は初回扱いで開き直すのが自然な挙動のため、DB には持たない）
@@ -560,7 +572,12 @@ export function createApp(deps: AppDeps): Hono {
       file,
       rev,
       content,
-      html: file.format === "markdown" ? renderMarkdown(content) : null,
+      html:
+        file.format === "markdown"
+          ? renderMarkdown(content)
+          : file.format === "latex"
+            ? renderLatexSource(content)
+            : null,
     });
   });
 
@@ -586,8 +603,7 @@ export function createApp(deps: AppDeps): Hono {
     const content = store.getRevisionContent(file.id, rev);
     if (content == null) return c.json({ error: `unknown revision: ${rev}` }, 404);
     return c.body(content, 200, {
-      "content-type":
-        file.format === "html" ? "text/html; charset=utf-8" : "text/markdown; charset=utf-8",
+      "content-type": DOWNLOAD_CONTENT_TYPES[file.format],
       "content-disposition": contentDispositionFor(
         downloadFileName(file.name, rev, file.latestRev),
       ),
@@ -980,6 +996,7 @@ export function createApp(deps: AppDeps): Hono {
     const content = store.getRevisionContent(file.id, rev);
     if (content == null) return c.text("not found", 404);
     if (file.format === "html") return c.html(content, 200, RAW_SANDBOX_HEADERS);
+    if (file.format === "latex") return c.text(content, 200, RAW_SANDBOX_HEADERS);
     return c.html(
       `<!doctype html><html><head><meta charset="utf-8"><link rel="icon" type="image/svg+xml" href="/favicon.svg"></head><body>${renderMarkdown(content)}</body></html>`,
       200,

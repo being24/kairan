@@ -1,11 +1,13 @@
 import Shiki from "@shikijs/markdown-it";
 import MarkdownIt from "markdown-it";
-import type { BundledLanguage } from "shiki";
+import { type BundledLanguage, createHighlighter } from "shiki";
 import { SOURCE_LINES_ATTR } from "../shared/consts.ts";
 
 // shiki は特殊言語 "text"（プレーン表示）を実行時に受理するが、
 // BundledLanguage 型に含まれない型定義の不備があるためここだけ閉じてアサートする
 const PLAIN_TEXT_LANGUAGE = "text" as BundledLanguage;
+
+const THEMES = { light: "github-light", dark: "github-dark" } as const;
 
 /**
  * markdown-it の map は [開始行, 終了行) の 0-based。リスト末尾の項目などは後続の空行まで
@@ -29,7 +31,7 @@ export async function createMarkdownRenderer(): Promise<(src: string) => string>
 
   md.use(
     await Shiki({
-      themes: { light: "github-light", dark: "github-dark" },
+      themes: THEMES,
       fallbackLanguage: PLAIN_TEXT_LANGUAGE,
     }),
   );
@@ -63,4 +65,23 @@ export async function createMarkdownRenderer(): Promise<(src: string) => string>
   });
 
   return (src: string) => md.render(src);
+}
+
+/**
+ * LaTeX はソースのまま行番号つきで見せる（組版しない）。
+ * markdown のコードブロックと同じ `<pre data-kairan-lines>` + `.line` の形で出すことで、
+ * 選択コメントの行範囲をクライアントが同じ計算で求められる
+ */
+export async function createLatexSourceRenderer(): Promise<(src: string) => string> {
+  const highlighter = await createHighlighter({
+    themes: Object.values(THEMES),
+    langs: ["latex"],
+  });
+  return (src: string) => {
+    const html = highlighter.codeToHtml(src, { lang: "latex", themes: THEMES });
+    // 開始行を 0（開き fence の位置）とすることで、コードブロックと同じ「開始行+1+行番号」が
+    // そのまま文書の 1-based の行番号になる
+    const lineCount = src.split("\n").length;
+    return html.replace(/^<pre\b/, `<pre ${SOURCE_LINES_ATTR}="0-${lineCount}"`);
+  };
 }

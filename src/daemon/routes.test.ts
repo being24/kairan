@@ -49,6 +49,7 @@ function makeApp(configOverrides: Partial<KairanConfig> = {}) {
     config: testConfig(configOverrides),
     version: "0.0.0-test",
     renderMarkdown: (src) => `<rendered>${src}</rendered>`,
+    renderLatexSource: (src) => `<latex-source>${src}</latex-source>`,
     notify: (title, body, url) => notified.push({ title, body, url }),
     openInBrowser: (url) => opened.push(url),
     openLocalFile: async (target, path) => {
@@ -1411,6 +1412,22 @@ describe("download", () => {
     expect(await download.text()).toBe("# hello");
   });
 
+  test("LaTeX は text/x-tex で返す", async () => {
+    const { app } = makeApp();
+    const session = await createSession(app);
+    const res = await publish(app, {
+      sessionId: session.id,
+      name: "paper.tex",
+      format: "latex",
+      content: "\\section{a}",
+    });
+    const { fileId } = (await res.json()) as { fileId: number };
+    const download = await app.request(`/api/files/${fileId}/download`);
+    expect(download.headers.get("content-type")).toContain("text/x-tex");
+    expect(download.headers.get("content-disposition")).toContain('filename="paper.tex"');
+    expect(await download.text()).toBe("\\section{a}");
+  });
+
   test("rev 指定は当該リビジョンの本文と rev 入りの名前を返す", async () => {
     const { app } = makeApp();
     const session = await createSession(app);
@@ -1511,6 +1528,43 @@ describe("favicon と raw の配信", () => {
     });
     const res = await app.request(`/raw/${session.id}/a.md`);
     expect(await res.text()).toContain('href="/favicon.svg"');
+  });
+});
+
+describe("LaTeX 文書", () => {
+  async function publishLatex(app: ReturnType<typeof makeApp>["app"]) {
+    const session = await createSession(app);
+    const res = await publish(app, {
+      sessionId: session.id,
+      name: "paper.tex",
+      format: "latex",
+      content: "\\section{a}",
+    });
+    const { fileId } = (await res.json()) as { fileId: number };
+    return { session, fileId };
+  }
+
+  test("本文 API はハイライトしたソースを html として返す", async () => {
+    const { app } = makeApp();
+    const { fileId } = await publishLatex(app);
+    const body = (await (await app.request(`/api/files/${fileId}/content`)).json()) as {
+      html: string | null;
+    };
+    expect(body.html).toBe("<latex-source>\\section{a}</latex-source>");
+  });
+
+  test("raw は組版せずプレーンテキストで返し、sandbox とキャッシュ抑止は markdown と同じ", async () => {
+    const { app } = makeApp();
+    const { session } = await publishLatex(app);
+    await publish(app, { sessionId: session.id, name: "a.md", format: "markdown", content: "# a" });
+    const latex = await app.request(`/raw/${session.id}/paper.tex`);
+    const markdown = await app.request(`/raw/${session.id}/a.md`);
+    expect(latex.headers.get("content-type")).toContain("text/plain");
+    expect(latex.headers.get("content-security-policy")).toBe(
+      markdown.headers.get("content-security-policy"),
+    );
+    expect(latex.headers.get("cache-control")).toBe(markdown.headers.get("cache-control"));
+    expect(await latex.text()).toBe("\\section{a}");
   });
 });
 

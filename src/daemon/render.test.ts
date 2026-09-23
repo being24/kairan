@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { createMarkdownRenderer } from "./render.ts";
+import { createLatexSourceRenderer, createMarkdownRenderer } from "./render.ts";
 
 let render: (src: string) => string;
 
@@ -58,5 +58,25 @@ describe("createMarkdownRenderer", () => {
 
   test("empty string renders to empty output", () => {
     expect(render("").trim()).toBe("");
+  });
+});
+
+describe("createLatexSourceRenderer", () => {
+  let renderLatex: (src: string) => string;
+
+  beforeAll(async () => {
+    renderLatex = await createLatexSourceRenderer();
+  });
+
+  test("ソース全体を1行1要素でハイライトし、1行目から数えられる行範囲を付ける", () => {
+    const html = renderLatex("\\section{序論}\n本文\n\\end{document}");
+    expect(html).toContain('<pre data-kairan-lines="0-3" class="shiki');
+    expect(html.match(/class="line"/g)).toHaveLength(3);
+    expect(html).toContain("序論");
+  });
+
+  test("HTML として解釈される文字はエスケープする", () => {
+    const html = renderLatex("a < b & <script>alert(1)</script>");
+    expect(html).not.toContain("<script>");
   });
 });
