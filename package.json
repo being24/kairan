@@ -1,7 +1,7 @@
 {
   "name": "kairan",
   "version": "0.1.0",
-  "description": "Local MCP server that circulates agent-generated markdown/html documents to your browser",
+  "description": "Local MCP server that circulates agent-generated markdown/html/LaTeX documents to your browser",
   "type": "module",
   "bin": {
     "kairan": "./src/cli.ts"

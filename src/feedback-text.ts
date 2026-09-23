@@ -3,7 +3,7 @@ import type { FeedbackBundle, LineRange } from "./shared/types.ts";
 export const FEEDBACK_GUIDANCE =
   "Human feedback received. Address each comment, then respond with reply_comment " +
   "(use commentId; set resolve=true once handled) and publish updated revisions as needed. " +
-  "`lines` is the 1-based line range in the markdown source of that `rev`.\n";
+  "`lines` is the 1-based line range in the document source (markdown / LaTeX) of that `rev`.\n";
 
 const CLIP_NOTICE =
   "\n[kairan] This is a partial excerpt; the rest was left out for length. " +

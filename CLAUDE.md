@@ -1,6 +1,6 @@
 # kairan
 
-agent が生成した markdown / HTML を tool call ひとつでブラウザに表示し、人間からのフィードバックを agent へ戻すローカル MCP サーバー。全体像・tool・設定は `README.md` を参照。
+agent が生成した markdown / HTML / LaTeX を tool call ひとつでブラウザに表示し、人間からのフィードバックを agent へ戻すローカル MCP サーバー。全体像・tool・設定は `README.md` を参照。
 
 ## 構成
 

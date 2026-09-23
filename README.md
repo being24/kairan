@@ -1,6 +1,6 @@
 # KAIRAN
 
-Claude Code / Codex などの agent が生成した markdown / HTML を、tool call ひとつでブラウザに表示するローカル MCP サーバー。
+Claude Code / Codex などの agent が生成した markdown / HTML / LaTeX を、tool call ひとつでブラウザに表示するローカル MCP サーバー。
 
 ![3ペインUI（セッション / ファイル / ビュー）](docs/screenshot-main.png)
 
@@ -17,6 +17,7 @@ Claude Code / Codex などの agent が生成した markdown / HTML を、tool c
 - agent が終了したセッションは自動で archive され、サイドバーの「archived」トグルで表示できる。`kairan restart` を挟んでも、生きている agent のセッションは active のまま残る
 - **agent を閉じて `--resume` / `--continue` で開き直すと、同じセッションに戻る**（Claude Code のセッション ID を鍵にしている。この ID を持たない agent では従来どおり毎回新しいセッションになる）。**セッションができるのは最初に kairan を使った時点**なので、agent を立ち上げただけでは何も増えない
 - markdown は GFM + shiki シンタックスハイライト + mermaid 図に対応。HTML は iframe でそのまま実行できる
+- **LaTeX（`.tex`）は組版せず、行番号つきのハイライトしたソースとして表示する**。論文・申請書の原稿に行単位でコメントし、agent へ行番号付きで返すための形式（PDF 化はしない。raw / ダウンロードはテキストのまま）
 - **publish された HTML は kairan と同一オリジンで動く**。実行中の文書にそのままインラインコメントを付けられるようにするための設計で、引き換えに文書のスクリプトは kairan の API（セッション・ファイルの削除、レビュー送信、ローカルファイルを開く操作）を叩ける。信頼できない HTML を publish しないこと（markdown 側は本体画面の `script-src 'self'` で inline handler を禁止している）
 - **タブの favicon がステータスを示す**。あなたの対応待ち（未回答の質問・agent がレビュー送信を待っている）があれば赤バッジ、タブを開いている間に届いた未読の publish があれば青バッジ。タブタイトルにも対応待ちの件数が出る
 - **表示中のファイルを「Finder で表示」「エディタで開く」「ダウンロード」できる**。Finder / エディタは `path` で publish されたファイルを localhost から見ているときだけ出る（cloudflare tunnel 等のリモート閲覧ではダウンロードのみ）
@@ -95,14 +96,14 @@ args = ["mcp"]
 
 ### `publish`
 
-markdown / HTML をブラウザに表示する。`path`（ファイルパス）か `content`（文字列）のどちらかを渡す。
+markdown / HTML / LaTeX をブラウザに表示する。`path`（ファイルパス）か `content`（文字列）のどちらかを渡す。
 
 | 引数 | 説明 |
 |---|---|
 | `path` | 表示するファイルのパス（`content` と排他） |
 | `content` | 本文の直接渡し（`name` 必須） |
 | `name` | セッション内のファイル ID（URL セグメント）。省略時は `path` の basename。**同名で再 publish = 上書き = 新リビジョン** |
-| `format` | `markdown` / `html`。省略時は拡張子から推定 |
+| `format` | `markdown` / `html` / `latex`。省略時は拡張子から推定（`.tex` は `latex`） |
 | `session` | publish 先のセッション ID（別プロセスから同じセッションを継続するときに使う）。省略時はこのプロセスのセッション |
 | `title` | ファイルリストに表示するタイトル |
 | `questions` | この文書について聞きたいこと（最大 8 問）。文書の末尾にフォームとして出る。各問は選択肢 + 自由記述を持つ。**渡さなければ今ある質問に触らない / `[]` を渡すと取り下げ** |
@@ -124,7 +125,7 @@ markdown / HTML をブラウザに表示する。`path`（ファイルパス）�
 
 各コメントの `commentId`・対象ファイル・引用文（選択範囲）・本文と、総評・スレッド返信・未回収の質問回答が届く。
 
-markdown の描画表示で選んだコメントには、その rev の markdown ソースでの行範囲（`lines`、1-based。例: `"12"` / `"12-14"`）が付く。粒度はブロック単位（段落・リスト項目・表の行・見出し）で、コードブロック内だけは行単位。HTML 文書へのコメントとファイル全体へのコメントは `lines: null`。
+markdown・LaTeX の描画表示で選んだコメントには、その rev のソースでの行範囲（`lines`、1-based。例: `"12"` / `"12-14"`）が付く。markdown の粒度はブロック単位（段落・リスト項目・表の行・見出し）で、コードブロック内だけは行単位。LaTeX は常に行単位。HTML 文書へのコメントとファイル全体へのコメントは `lines: null`。
 
 `wait_seconds` を明示的に渡したときだけ、その秒数だけブロックして待つ（Stop hook を持たない agent 向け）。
 
