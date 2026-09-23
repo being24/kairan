@@ -63,7 +63,7 @@ export interface PublishResponse {
   askId: number | null;
 }
 
-/** markdown ソースの行範囲（1-based, 両端含む） */
+/** 文書ソース（markdown / LaTeX）の行範囲（1-based, 両端含む） */
 export interface LineRange {
   start: number;
   end: number;
@@ -74,7 +74,7 @@ export interface CommentAnchor {
   exact: string;
   prefix: string;
   suffix: string;
-  /** markdown の描画表示で選んだときだけ持つ。HTML 文書・旧コメントには無い */
+  /** markdown・LaTeX の描画表示で選んだときだけ持つ。HTML 文書・旧コメントには無い */
   lines?: LineRange | null;
 }
 

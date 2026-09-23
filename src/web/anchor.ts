@@ -66,11 +66,11 @@ function linePositionOf(node: Text): LinePosition | null {
 }
 
 /**
- * markdown の描画表示での選択範囲を、ソースの行範囲へ落とす。
+ * 描画表示（markdown / LaTeX ソース）での選択範囲を、ソースの行範囲へ落とす。
  * 端は「実際に1文字以上選ばれたテキストノード」で取る。Range の終端は排他的で、
  * 次のブロックの先頭（offset 0）を指すことがあり、そこを含めると1ブロック広がるため
  */
-export function markdownLineRange(root: Element, range: Range): LineRange | null {
+export function sourceLineRange(root: Element, range: Range): LineRange | null {
   const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let first: LinePosition | null = null;
   let last: LinePosition | null = null;

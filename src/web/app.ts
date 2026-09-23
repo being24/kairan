@@ -13,8 +13,8 @@ import {
   collectTextSlices,
   computeAnchor,
   MAX_QUOTE_LENGTH,
-  markdownLineRange,
   resolveQuoteOffsets,
+  sourceLineRange,
   unwrapMarks,
   wrapSlices,
 } from "./anchor.ts";
@@ -831,7 +831,9 @@ async function renderViewBody(file: FileEntry, generation: number): Promise<void
     return;
   }
 
-  const article = el("article", { class: "markdown-body" });
+  const article = el("article", {
+    class: file.format === "latex" ? "markdown-body latex-source" : "markdown-body",
+  });
   article.innerHTML = data.html ?? "";
   const layout = el(
     "div",
@@ -1085,7 +1087,7 @@ function attachHtmlScope(iframe: HTMLIFrameElement, expectedSrc: string): void {
 
 function currentScope(): DocScope | null {
   if (htmlScope != null) return htmlScope.frame?.isConnected === true ? htmlScope : null;
-  return markdownScope();
+  return documentScope();
 }
 
 interface ViewRect {
@@ -1327,7 +1329,7 @@ function isCurrentContext(context: SelectionContext): boolean {
   );
 }
 
-function markdownScope(): DocScope | null {
+function documentScope(): DocScope | null {
   const article = document.querySelector<HTMLElement>(".markdown-body");
   return article == null ? null : { root: article, frame: null };
 }
@@ -1388,7 +1390,7 @@ function handleSelectionEnd(scope: DocScope | null): void {
 
   const anchor = computeAnchor(scope.root, range);
   // HTML 文書は agent の HTML がそのまま DOM になるため、同名の属性があっても markdown の行ではない
-  if (scope.frame == null) anchor.lines = markdownLineRange(scope.root, range);
+  if (scope.frame == null) anchor.lines = sourceLineRange(scope.root, range);
   const rect = toViewRect(range.getBoundingClientRect(), scope);
   if (anchor.exact.length > MAX_QUOTE_LENGTH) {
     // このまま送っても API に弾かれ、入力したコメントが消えるだけなのでここで断る
@@ -2064,7 +2066,7 @@ function buildLayout(): void {
     hideCommentFab();
     // click 直後は selection がまだ確定していないことがあるため1フレーム待つ。
     // HTML 文書の選択は iframe 側の mouseup で拾う（こちらの選択とは別物）
-    setTimeout(() => handleSelectionEnd(markdownScope()), 0);
+    setTimeout(() => handleSelectionEnd(documentScope()), 0);
   });
 
   const brand = root.querySelector(".brand");

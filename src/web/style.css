@@ -785,6 +785,28 @@ body.resizing {
   }
 }
 
+/* LaTeX はソースそのものが本文。行番号を振り、長い行は折り返して横スクロールさせない */
+.markdown-body.latex-source pre.shiki {
+  counter-reset: source-line;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.markdown-body.latex-source .line {
+  counter-increment: source-line;
+}
+
+.markdown-body.latex-source .line::before {
+  content: counter(source-line);
+  display: inline-block;
+  width: 3em;
+  margin-right: 1.2em;
+  text-align: right;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
 /* ---- source / html / diff views --------------------------------------- */
 
 .source-view {
