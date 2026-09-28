@@ -830,6 +830,7 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({
       draft: store.getDraftReview(session.id),
       comments: store.listSessionDraftComments(session.id),
+      draftReplyCount: store.countSessionDraftReplies(session.id),
     });
   });
 
