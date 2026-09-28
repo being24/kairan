@@ -663,7 +663,7 @@ function buildFileActions(file: FileEntry): HTMLElement {
         void postJson(`/api/files/${file.id}/delete`).then(() => {
           state.currentFileName = null;
           pushUrl();
-          return Promise.all([loadFiles(), loadView()]);
+          return Promise.all([loadFiles(), loadView(), loadReviewDraft()]);
         });
       },
     );
@@ -1800,6 +1800,7 @@ function connectEvents(): void {
       pushUrl();
     }
     void loadFiles().then(() => loadView());
+    void loadReviewDraft();
   });
 
   eventSource.addEventListener("feedback:changed", (event) => {
